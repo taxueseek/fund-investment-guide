@@ -1,322 +1,3 @@
-# Invest Series: Investment Analysis Guide
-
-Buy funds like hiring a steward, buy stocks like partnering in business. Don't trust people you don't understand, who are unreliable, or who charge too much.
-
-This tool helps you with three things: **see what you're investing in, judge whether it's worth it, determine if the price is right**.
-
----
-
-## Quick Start
-
-```bash
-npx skills add taxueseek/fund-investment-guide
-```
-
-After installation, just ask Claude:
-- "How is this fund?"
-- "Analyze Moutai"
-- "Can I buy gold?"
-- "Let the masters take a look at this stock"
-
-The system automatically identifies what you want to analyze and routes to the corresponding analysis flow.
-
-> **Note**: This tool only helps you think clearly. It's not investment advice and doesn't guarantee profits. After using it to analyze, buying or selling is entirely your own decision.
-
----
-
-## What This Is
-
-Not a data query tool — it's a **judgment framework**.
-
-The biggest pitfall in investing isn't lack of information, it's **not knowing what to look at**. This tool tells you: these three things are all you need to check.
-
-```
-User Question
-    │
-    ▼
-┌─────────────┐
-│  invest     │  ← Identifies what you want to analyze
-│  Entry      │
-└──────┬──────┘
-       │
-       ├──────────┬──────────┬──────────┬──────────┬──────────┐
-       ▼          ▼          ▼          ▼          ▼          ▼
-   ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐
-   │ Stocks│  │ Funds │  │Convert│  │Commod │  │ REITs │  │Asset  │
-   │3-Gate │  │Scene  │  │3-Gate │  │3-Gate │  │3-Gate │  │Alloc  │
-   │+Deep  │  │Route  │  │Review │  │Review │  │Review │  │       │
-   └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘
-       │          │          │          │          │          │
-       └──────────┴────┬─────┴──────────┴──────────┴──────────┘
-                       ▼
-               ┌───────────────┐
-               │  3-Gate Review│
-               │               │
-               │ 1. Understand?│  ← Capability circle / Strategy
-               │ 2. Good?      │  ← Moat / Sustainability
-               │ 3. Cheap?     │  ← Margin of safety / Valuation
-               └───────────────┘
-```
-
----
-
-## What You Can Analyze
-
-| You want to analyze | Routes to | Core Question | Applicable Markets |
-|:--------------------|:----------|:--------------|:-------------------|
-| A specific stock | invest-stock | Understand the business? Moat? Right price? | A-shares, HK stocks, US stocks |
-| A specific fund | invest-fund | Understand the strategy? Can beat benchmark? Cost reasonable? | Active funds, ETFs, QDII |
-| Convertible bonds | invest-convertible | Bond floor sufficient? Premium reasonable? | A-share convertible bonds |
-| Gold/Oil | invest-commodity | Logic clear? Position reasonable? | Commodities |
-| REITs | invest-reit | Asset quality? Distribution sustainable? | Domestic and international REITs |
-| Overall allocation | invest-allocation | Stock-bond ratio reasonable? Rebalanced? | Cross-asset portfolio |
-| Not sure? | invest-discuss | Let multiple investment minds examine together | Any target |
-| /cli analysis | invest-cli | Terminal data fetch + analysis framework | A/HK/US stocks, funds |
-
----
-
-## What is the 3-Gate Review
-
-What's the biggest fear in investing? **Looking at what you shouldn't, missing what you should**.
-
-These three gates break complex investment decisions into three must-answer questions:
-
-### Gate 1: Do You Understand?
-
-If you don't understand it, you can't hold it through ups and downs.
-
-- Stocks: How does this company make money? Why do customers choose it?
-- Funds: What does it invest in? What's the strategy? What's the benchmark?
-- Convertible bonds: Do you understand the terms? Put, call, reset — what do they mean?
-
-**Fail this gate: abandon directly.** Don't touch what you don't understand.
-
-### Gate 2: Is It Good?
-
-Only good things can sustain returns.
-
-- Stocks: Pricing power? ROE consistently >12%? Good cash flow?
-- Funds: Beats benchmark long-term? Manager stable? Risk-adjusted returns good?
-- Commodities/REITs: Underlying asset quality? Distribution/earnings sustainable?
-
-**Fail this gate: it's a mediocre target, not worth your time.**
-
-### Gate 3: Is It Cheap?
-
-Even good things hurt if you buy expensive.
-
-- PE/PB at what historical percentile?
-- If it drops 30%, can you handle it?
-- Is there margin of safety entering now?
-
-**Fail this gate: not don't buy — wait for a better time.**
-
----
-
-## v2.0 Feature Highlights
-
-### Unified Stock Entry
-
-Previously A-shares, HK stocks, and US stocks used separate skills. Now unified into `invest-stock`:
-
-| Capability | Description |
-|:-----------|:------------|
-| 3-Gate Review | Default mode, A-shares/HK stocks |
-| 4-Dimension Score | Auto-switches for US stocks, ROE/Debt/FCF/Moat → A-D rating |
-| Institutional Deep | Say "deep analysis" to enter, DCF + comparable company + IC Memo |
-| HK-A Enhancement | Auto-adds policy sensitivity, AH premium, north/south flow for A/HK stocks |
-
-### Fund Scene Routing
-
-No longer one-size-fits-all. Auto-selects path based on your question:
-
-| Scene | Trigger | Core Judgment Axis |
-|:------|:--------|:-------------------|
-| Same manager, multiple funds | "Which of Zhang Kun's funds to pick" | Pick the one most like the manager (longest tenure / right scale / high institutional share) |
-| Cross-fund comparison | "Which is better, Fund A or B" | Multi-dimensional comparison scoring |
-| Industry theme | "New energy fund" | Manager-industry fit > industry beta |
-| New fund | "Is this new fund worth buying" | Manager inference + company DNA |
-| ETF | "CSI 300 ETF" | Expense ratio + tracking error + liquidity |
-| Standard checkup | "How is this fund" | Full 3-gate review |
-
-### Masters Discussion
-
-Four investment minds examine the same target simultaneously, exposing blind spots from any single perspective:
-
-| Perspective | Core Question |
-|:------------|:--------------|
-| Business | Understand this business? Has a moat? |
-| Trend | How much optimism is priced in? Any catalyst? |
-| Allocation | What position size? Can handle how much drawdown? |
-| Contrarian | Three most likely scenarios to lose money? |
-
-Supports two depth levels: Quick Scan (default) and Deep Interrogation (pre-position sizing).
-
-### Investment Analysis CLI
-
-Terminal data fetch + analysis framework integrated:
-
-```bash
-python invest_cli.py stock 600519      # A/HK stock real-time quotes + valuation
-python invest_cli.py fund 006195      # Fund NAV / performance / fees / top holdings
-python invest_cli.py us AAPL         # US stock valuation / financials / ratings
-python invest_cli.py screen "Bank stocks with PE below 10"  # Stock screening
-```
-
----
-
-## How It Differs from Ordinary Analysis
-
-| Ordinary Approach | This Tool |
-|:------------------|:----------|
-| Gives you data, you figure it out | Tells you what to look at and what not to |
-| Predicts tomorrow's move | Doesn't predict, only assesses "worth holding?" |
-| Complex scoring systems | Simple pass / fail / wait |
-| Manually updated year data | Auto-calculates which report to look at |
-| Only looks at returns | Looks at risk-adjusted returns (Sharpe, Calmar) |
-| Single product analysis | Supports asset allocation perspective |
-
----
-
-## Design Philosophy
-
-### 1. Simplicity
-
-Investing doesn't need complex models. Buffett looks at three things: understand it, is it good, is it cheap. This tool extends that logic to all asset types.
-
-### 2. No Decision-Making for You
-
-The tool only provides a judgment framework. Decision power is entirely yours. It doesn't tell you "buy" or "sell" — only "did you pass this gate?"
-
-### 3. Dynamic Time
-
-No manual year updates. Input today's date, auto-calculates whether to look at N or N-1 year reports, and data freshness.
-
-### 4. Master Perspective
-
-When unsure, start the discussion round. Let business, trend, allocation, and contrarian perspectives examine the same target, revealing blind spots you can't see alone.
-
----
-
-## Usage Examples
-
-### Analyzing a Stock
-
-```
-You: Analyze Tencent 00700
-
-System: Analyzing Tencent (00700), entering invest-stock.
-
-3-Gate Review Results:
-
-| Gate | Result | Key Findings |
-|------|--------|--------------|
-| Understand | Pass | Gaming + advertising + investments, three segments clear |
-| Good | Pass | Deep moat, ROE consistently >15%, strong cash flow |
-| Cheap | Wait | PE at 70th historical percentile, insufficient margin of safety |
-
-Overall: Wait for valuation to回落 to PE<25 before considering.
-```
-
-### Analyzing a Fund
-
-```
-You: How is Zhang Kun's fund?
-
-System: Analyzing Zhang Kun's fund, entering invest-fund.
-
-Key Findings:
-- Flagship fund managed for 5+ years, through bull and bear cycles
-- Multiple funds with >80% holdings overlap — pick the lowest expense ratio
-- Current scale >10B RMB, flexibility limited, alpha may decline
-
-Recommendation: If you're a Zhang Kun fan, pick his longest-tenured flagship.
-```
-
-### Asset Allocation Review
-
-```
-You: Is my asset allocation reasonable?
-
-System: Entering invest-allocation.
-
-Strategic allocation suggestion (based on 20% max drawdown, 5+ year horizon):
-- Stocks: 60%
-- Bonds: 30%
-- Commodities: 10%
-
-Rebalancing rules:
-- Check quarterly
-- Trigger when any asset deviates ±5% from target
-
-Current deviation: Stocks over-allocated by 15%, suggest reducing stocks or adding bonds.
-```
-
-### Investment Roundtable
-
-```
-You: Let the masters take a look at Moutai
-
-System: Starting masters discussion, four perspectives scanning in parallel.
-
-Business: Moutai is an ideal business, rare brand moat, extreme pricing power...
-Trend: Current price contains too much optimism...
-Allocation: If position >10%, volatility risk needs attention...
-Contrarian: Most likely loss scenarios are...
-
-Consensus: Top-tier business model, but current price lacks margin of safety.
-```
-
----
-
-## Before You Use This
-
-This tool is like a dictionary — helps you recognize characters, but doesn't write essays for you. Specifically:
-
-**First, you bear your own gains and losses.** This tool won't tell you which stock to buy or which fund to sell, and doesn't guarantee you'll make money. After using it to analyze, whether to buy and how much is entirely your decision. You bear all profits and losses.
-
-**Second, information is limited.** This tool tries to use the latest public data, but data may be delayed or incorrect. It gives you reference, not definitive answers.
-
-**Third, it cannot replace professional advice.** If you have large investment needs, consult a licensed investment advisor rather than relying on an AI tool.
-
-**One sentence: The tool only helps you think clearly. The decision is yours. The risk is yours.**
-
----
-
-## Project Structure
-
-```
-skills/
-├── invest/                    # Entry: auto-identifies target type
-├── invest-stock/              # Stock analysis (3-Gate/4-Dimension/Institutional Deep/HK-A Enhancement)
-├── invest-fund/               # Fund analysis (Scene routing A/B/C/E/F/G)
-├── invest-convertible/        # Convertible bond analysis
-├── invest-commodity/          # Commodity analysis
-├── invest-reit/               # REITs analysis
-├── invest-allocation/         # Asset allocation
-├── invest-discuss/            # Masters discussion (multi-perspective validation)
-└── invest-cli/                # Investment CLI (data fetch + analysis framework)
-```
-
----
-
-## Version History
-
-| Version | Date | Changes |
-|:--------|:-----|:--------|
-| v2.0 | 2026-06 | Unified framework upgrade: invest-stock merged former invest-hk-a/invest-us/invest-institutional, invest-fund added scene routing, new invest-discuss/invest-cli added, removed invest-report/invest-fund-manager/invest-upgrade/zaoren-invest-roundtable |
-| v1.0 | 2026-04 | Initial release, unified 3-gate review framework, covering stocks/bonds/commodities/allocation/roundtable |
-
----
-
-If this project is helpful to you, feel free to give it a Star.
-
----
-
-* * *
-
-## 中文版
-
 # Invest 系列：投资分析指南
 
 买基金像请管家，买股票像合伙做生意。不懂的人、不靠谱的人、要价太高的人，都不能托付。
@@ -325,7 +6,7 @@ If this project is helpful to you, feel free to give it a Star.
 
 ---
 
-## 快速开始，输入下列指令，即可安装。
+## 快速开始
 
 ```bash
 npx skills add taxueseek/fund-investment-guide
@@ -629,6 +310,224 @@ skills/
 ---
 
 如果这个项目对你有帮助，欢迎点个 Star。
+
+---
+
+* * *
+
+## English Version
+
+# Invest Series: Investment Analysis Guide
+
+Buy funds like hiring a steward, buy stocks like partnering in business. Don't trust people you don't understand, who are unreliable, or who charge too much.
+
+This tool helps you with three things: **see what you're investing in, judge whether it's worth it, determine if the price is right**.
+
+---
+
+## Quick Start
+
+```bash
+npx skills add taxueseek/fund-investment-guide
+```
+
+After installation, just ask Claude:
+- "How is this fund?"
+- "Analyze Moutai"
+- "Can I buy gold?"
+- "Let the masters take a look at this stock"
+
+The system automatically identifies what you want to analyze and routes to the corresponding analysis flow.
+
+> **Note**: This tool only helps you think clearly. It's not investment advice and doesn't guarantee profits. After using it to analyze, buying or selling is entirely your own decision.
+
+---
+
+## What This Is
+
+Not a data query tool — it's a **judgment framework**.
+
+The biggest pitfall in investing isn't lack of information, it's **not knowing what to look at**. This tool tells you: these three things are all you need to check.
+
+```
+User Question
+    │
+    ▼
+┌─────────────┐
+│  invest     │  ← Identifies what you want to analyze
+│  Entry      │
+└──────┬──────┘
+       │
+       ├──────────┬──────────┬──────────┬──────────┬──────────┐
+       ▼          ▼          ▼          ▼          ▼          ▼
+   ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐
+   │ Stocks│  │ Funds │  │Convert│  │Commod │  │ REITs │  │Asset  │
+   │3-Gate │  │Scene  │  │3-Gate │  │3-Gate │  │3-Gate │  │Alloc  │
+   │+Deep  │  │Route  │  │Review │  │Review │  │Review │  │       │
+   └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘
+       │          │          │          │          │          │
+       └──────────┴────┬─────┴──────────┴──────────┴──────────┘
+                       ▼
+               ┌───────────────┐
+               │  3-Gate Review│
+               │               │
+               │ 1. Understand?│  ← Capability circle / Strategy
+               │ 2. Good?      │  ← Moat / Sustainability
+               │ 3. Cheap?     │  ← Margin of safety / Valuation
+               └───────────────┘
+```
+
+---
+
+## What You Can Analyze
+
+| You want to analyze | Routes to | Core Question | Applicable Markets |
+|:--------------------|:----------|:--------------|:-------------------|
+| A specific stock | invest-stock | Understand the business? Moat? Right price? | A-shares, HK stocks, US stocks |
+| A specific fund | invest-fund | Understand the strategy? Can beat benchmark? Cost reasonable? | Active funds, ETFs, QDII |
+| Convertible bonds | invest-convertible | Bond floor sufficient? Premium reasonable? | A-share convertible bonds |
+| Gold/Oil | invest-commodity | Logic clear? Position reasonable? | Commodities |
+| REITs | invest-reit | Asset quality? Distribution sustainable? | Domestic and international REITs |
+| Overall allocation | invest-allocation | Stock-bond ratio reasonable? Rebalanced? | Cross-asset portfolio |
+| Not sure? | invest-discuss | Let multiple investment minds examine together | Any target |
+| /cli analysis | invest-cli | Terminal data fetch + analysis framework | A/HK/US stocks, funds |
+
+---
+
+## What is the 3-Gate Review
+
+What's the biggest fear in investing? **Looking at what you shouldn't, missing what you should**.
+
+These three gates break complex investment decisions into three must-answer questions:
+
+### Gate 1: Do You Understand?
+
+If you don't understand it, you can't hold it through ups and downs.
+
+- Stocks: How does this company make money? Why do customers choose it?
+- Funds: What does it invest in? What's the strategy? What's the benchmark?
+- Convertible bonds: Do you understand the terms? Put, call, reset — what do they mean?
+
+**Fail this gate: abandon directly.** Don't touch what you don't understand.
+
+### Gate 2: Is It Good?
+
+Only good things can sustain returns.
+
+- Stocks: Pricing power? ROE consistently >12%? Good cash flow?
+- Funds: Beats benchmark long-term? Manager stable? Risk-adjusted returns good?
+- Commodities/REITs: Underlying asset quality? Distribution/earnings sustainable?
+
+**Fail this gate: it's a mediocre target, not worth your time.**
+
+### Gate 3: Is It Cheap?
+
+Even good things hurt if you buy expensive.
+
+- PE/PB at what historical percentile?
+- If it drops 30%, can you handle it?
+- Is there margin of safety entering now?
+
+**Fail this gate: not don't buy — wait for a better time.**
+
+---
+
+## v2.0 Feature Highlights
+
+### Unified Stock Entry
+
+Previously A-shares, HK stocks, and US stocks used separate skills. Now unified into `invest-stock`:
+
+| Capability | Description |
+|:-----------|:------------|
+| 3-Gate Review | Default mode, A-shares/HK stocks |
+| 4-Dimension Score | Auto-switches for US stocks, ROE/Debt/FCF/Moat → A-D rating |
+| Institutional Deep | Say "deep analysis" to enter, DCF + comparable company + IC Memo |
+| HK-A Enhancement | Auto-adds policy sensitivity, AH premium, north/south flow for A/HK stocks |
+
+### Fund Scene Routing
+
+No longer one-size-fits-all. Auto-selects path based on your question:
+
+| Scene | Trigger | Core Judgment Axis |
+|:------|:--------|:-------------------|
+| Same manager, multiple funds | "Which of Zhang Kun's funds to pick" | Pick the one most like the manager |
+| Cross-fund comparison | "Which is better, Fund A or B" | Multi-dimensional comparison scoring |
+| Industry theme | "New energy fund" | Manager-industry fit > industry beta |
+| New fund | "Is this new fund worth buying" | Manager inference + company DNA |
+| ETF | "CSI 300 ETF" | Expense ratio + tracking error + liquidity |
+| Standard checkup | "How is this fund" | Full 3-gate review |
+
+### Masters Discussion
+
+Four investment minds examine the same target simultaneously:
+
+| Perspective | Core Question |
+|:------------|:--------------|
+| Business | Understand this business? Has a moat? |
+| Trend | How much optimism is priced in? Any catalyst? |
+| Allocation | What position size? Can handle how much drawdown? |
+| Contrarian | Three most likely scenarios to lose money? |
+
+### Investment Analysis CLI
+
+```bash
+python invest_cli.py stock 600519      # A/HK stock real-time quotes + valuation
+python invest_cli.py fund 006195      # Fund NAV / performance / fees
+python invest_cli.py us AAPL         # US stock valuation / financials
+python invest_cli.py screen "Bank stocks with PE below 10"
+```
+
+---
+
+## Design Philosophy
+
+1. **Simplicity** — Buffett's three questions extended to all asset types
+2. **No Decision-Making for You** — Framework only, decisions are yours
+3. **Dynamic Time** — Auto-calculates which report to look at
+4. **Master Perspective** — Multi-perspective discussion to expose blind spots
+
+---
+
+## Before You Use This
+
+**First, you bear your own gains and losses.** This tool won't tell you which stock to buy or which fund to sell.
+
+**Second, information is limited.** Data may be delayed or incorrect. It gives you reference, not definitive answers.
+
+**Third, it cannot replace professional advice.** Consult a licensed investment advisor for large investment needs.
+
+**One sentence: The tool only helps you think clearly. The decision is yours. The risk is yours.**
+
+---
+
+## Project Structure
+
+```
+skills/
+├── invest/                    # Entry: auto-identifies target type
+├── invest-stock/              # Stock analysis (3-Gate/4-Dimension/Institutional Deep/HK-A)
+├── invest-fund/               # Fund analysis (Scene routing A/B/C/E/F/G)
+├── invest-convertible/        # Convertible bond analysis
+├── invest-commodity/          # Commodity analysis
+├── invest-reit/               # REITs analysis
+├── invest-allocation/         # Asset allocation
+├── invest-discuss/            # Masters discussion (multi-perspective validation)
+└── invest-cli/                # Investment CLI (data fetch + analysis framework)
+```
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|:--------|:-----|:--------|
+| v2.0 | 2026-06 | Unified framework: invest-stock merged HK/US/Institutional, invest-fund scene routing, new invest-discuss/invest-cli |
+| v1.0 | 2026-04 | Initial release, unified 3-gate review framework |
+
+---
+
+If this project is helpful to you, feel free to give it a Star.
 
 ---
 
