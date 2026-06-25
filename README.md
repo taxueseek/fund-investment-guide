@@ -6,7 +6,7 @@
 
 ---
 
-## 快速开始
+## 快速开始，输入下列指令，即可安装。
 
 ```bash
 npx skills add taxueseek/fund-investment-guide
