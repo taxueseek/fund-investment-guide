@@ -57,7 +57,7 @@ def extract_fund_report(pdf_path, max_pages=15):
         return None, f"提取失败: {str(e)}"
 
 # 使用示例
-# text, msg = extract_fund_report("/Users/.../基金季报.pdf")
+# text, msg = extract_fund_report("$HOME/.../基金季报.pdf")
 ```
 
 **性能对比**：

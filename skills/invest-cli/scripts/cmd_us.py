@@ -1,118 +1,129 @@
 #!/usr/bin/env python3
 """
 美股分析 - yfinance 数据源
-输出：估值 + 财务 + 评级（对标 invest-us 四维度框架）
+输出：估值 + 财务 + 评级（对标 invest-stock 四维框架）
+
+JSON 契约：与 stock/fund 一致，始终提供扁平 ``data``，
+同时保留 quote/financial 分区，方便终端展示与 agent 消费。
 """
+from __future__ import annotations
 
 import sys
-import json
 from datetime import datetime
+
+from _common import ensure_script_dir_on_path, json_out
+
+ensure_script_dir_on_path()
 
 
 def fetch_us_data(symbol: str) -> dict:
-    """使用 yfinance 获取美股数据"""
     try:
         import yfinance as yf
     except ImportError:
-        print("错误: 未安装 yfinance。运行: pip3 install yfinance", file=sys.stderr)
+        print(
+            "错误: 未安装 yfinance。运行: python3 -m pip install yfinance",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     ticker = yf.Ticker(symbol.upper())
-
-    # 基础信息
-    info = ticker.info
-
-    # 近期价格历史（1年）
+    info = ticker.info or {}
     hist = ticker.history(period="1y")
 
-    # 财务数据
-    try:
-        financials = ticker.financials
-        balance = ticker.balance_sheet
-        cashflow = ticker.cashflow
-    except Exception:
-        financials = balance = cashflow = None
-
-    # 计算关键指标
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
-    pe = info.get("trailingPE") or info.get("forwardPE")
+    pe_trailing = info.get("trailingPE")
+    pe_forward = info.get("forwardPE")
     pb = info.get("priceToBook")
     market_cap = info.get("marketCap")
     dividend_yield = info.get("dividendYield")
     beta = info.get("beta")
-
-    # ROE
     roe = info.get("returnOnEquity")
-
-    # 负债率
     debt_to_equity = info.get("debtToEquity")
-
-    # 自由现金流
     fcf = info.get("freeCashflow")
-
-    # 营收 & 净利润（最新年报）
     revenue = info.get("totalRevenue")
     net_income = info.get("netIncomeToCommon")
-
-    # 52周高低
     high_52w = info.get("fiftyTwoWeekHigh")
     low_52w = info.get("fiftyTwoWeekLow")
-
-    # 分析师评级
     recommendation = info.get("recommendationKey")
     target_price = info.get("targetMeanPrice")
 
-    # 从历史数据计算最大回试
     max_drawdown = None
     if hist is not None and not hist.empty:
         prices = hist["Close"].dropna()
         if len(prices) > 0:
             peak = prices.expanding(min_periods=1).max()
             drawdown = (prices - peak) / peak
-            max_drawdown = drawdown.min()
+            max_drawdown = float(drawdown.min())
+
+    quote = {
+        "price": price,
+        "change_pct": None,
+        "market_cap": market_cap,
+        "pe_trailing": pe_trailing,
+        "pe_forward": pe_forward,
+        "pb": pb,
+        "dividend_yield": dividend_yield,
+        "beta": beta,
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+    }
+    financial = {
+        "revenue": revenue,
+        "net_income": net_income,
+        "roe": roe,
+        "debt_to_equity": debt_to_equity,
+        "free_cash_flow": fcf,
+        "gross_margin": info.get("grossMargins"),
+        "operating_margin": info.get("operatingMargins"),
+        "profit_margin": info.get("profitMargins"),
+    }
+    analyst = {
+        "recommendation": recommendation,
+        "target_price": target_price,
+        "analyst_count": info.get("numberOfAnalystOpinions"),
+    }
+    risk = {"max_drawdown_1y": max_drawdown, "beta": beta}
+    business = {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "country": info.get("country"),
+        "employees": info.get("fullTimeEmployees"),
+    }
+
+    # Flat data for investment-agent / shared consumers (contract with stock/fund)
+    flat = {
+        **quote,
+        **financial,
+        "recommendation": recommendation,
+        "target_price": target_price,
+        "max_drawdown_1y": max_drawdown,
+        "sector": business.get("sector"),
+        "industry": business.get("industry"),
+    }
+    # Chinese aliases used by monitor thresholds when scanning US via shared gates
+    if pe_trailing is not None:
+        flat["市盈率PE(TTM)"] = pe_trailing
+    if pb is not None:
+        flat["市净率PB"] = pb
+    if roe is not None:
+        # yfinance ROE is typically a ratio (0.15); expose percent for CN consumers
+        flat["净资产收益率ROE"] = roe * 100 if abs(roe) <= 2 else roe
+    if price is not None:
+        flat["最新价"] = price
+        flat["收盘价"] = price
 
     return {
         "symbol": symbol.upper(),
-        "name": info.get("shortName") or info.get("longName", ""),
+        "code": symbol.upper(),
+        "name": info.get("shortName") or info.get("longName") or symbol.upper(),
         "currency": info.get("currency", "USD"),
         "timestamp": datetime.now().isoformat(),
-        "quote": {
-            "price": price,
-            "change_pct": None,
-            "market_cap": market_cap,
-            "pe_trailing": info.get("trailingPE"),
-            "pe_forward": info.get("forwardPE"),
-            "pb": pb,
-            "dividend_yield": dividend_yield,
-            "beta": beta,
-            "high_52w": high_52w,
-            "low_52w": low_52w,
-        },
-        "financial": {
-            "revenue": revenue,
-            "net_income": net_income,
-            "roe": roe,
-            "debt_to_equity": debt_to_equity,
-            "free_cash_flow": fcf,
-            "gross_margin": info.get("grossMargins"),
-            "operating_margin": info.get("operatingMargins"),
-            "profit_margin": info.get("profitMargins"),
-        },
-        "analyst": {
-            "recommendation": recommendation,
-            "target_price": target_price,
-            "analyst_count": info.get("numberOfAnalystOpinions"),
-        },
-        "risk": {
-            "max_drawdown_1y": max_drawdown,
-            "beta": beta,
-        },
-        "business": {
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "country": info.get("country"),
-            "employees": info.get("fullTimeEmployees"),
-        },
+        "quote": quote,
+        "financial": financial,
+        "analyst": analyst,
+        "risk": risk,
+        "business": business,
+        "data": flat,
     }
 
 
@@ -130,14 +141,17 @@ def format_terminal(data: dict) -> str:
     lines.append(f"  货币: {data.get('currency', 'USD')}")
     lines.append(f"{'=' * 60}")
 
-    # 行情
     lines.append(f"\n  {'指标':<16} {'数值':>16}")
     lines.append(f"  {'-' * 34}")
     for key, label in [
-        ("price", "当前价格"), ("pe_trailing", "市盈率(TTM)"),
-        ("pe_forward", "市盈率(前瞻)"), ("pb", "市净率"),
-        ("dividend_yield", "股息率"), ("beta", "Beta"),
-        ("market_cap", "总市值"), ("high_52w", "52周最高"),
+        ("price", "当前价格"),
+        ("pe_trailing", "市盈率(TTM)"),
+        ("pe_forward", "市盈率(前瞻)"),
+        ("pb", "市净率"),
+        ("dividend_yield", "股息率"),
+        ("beta", "Beta"),
+        ("market_cap", "总市值"),
+        ("high_52w", "52周最高"),
         ("low_52w", "52周最低"),
     ]:
         val = q.get(key)
@@ -150,13 +164,14 @@ def format_terminal(data: dict) -> str:
         else:
             lines.append(f"  {label:<16} {'-':>16}")
 
-    # 财务
     if f:
         lines.append(f"\n  {'财务指标':<16} {'数值':>16}")
         lines.append(f"  {'-' * 34}")
         for key, label in [
-            ("revenue", "营收"), ("net_income", "净利润"),
-            ("roe", "ROE"), ("debt_to_equity", "负债/权益"),
+            ("revenue", "营收"),
+            ("net_income", "净利润"),
+            ("roe", "ROE"),
+            ("debt_to_equity", "负债/权益"),
             ("free_cash_flow", "自由现金流"),
         ]:
             val = f.get(key)
@@ -169,16 +184,15 @@ def format_terminal(data: dict) -> str:
             else:
                 lines.append(f"  {label:<16} {'-':>16}")
 
-        # 利润率
         for key, label in [
-            ("gross_margin", "毛利率"), ("operating_margin", "经营利润率"),
+            ("gross_margin", "毛利率"),
+            ("operating_margin", "经营利润率"),
             ("profit_margin", "净利率"),
         ]:
             val = f.get(key)
             if val is not None:
                 lines.append(f"  {label:<16} {val * 100:>15.1f}%")
 
-    # 风险
     lines.append(f"\n  {'风险指标':<16} {'数值':>16}")
     lines.append(f"  {'-' * 34}")
     mdd = r.get("max_drawdown_1y")
@@ -187,7 +201,6 @@ def format_terminal(data: dict) -> str:
     if r.get("beta"):
         lines.append(f"  {'Beta':<16} {r['beta']:>16}")
 
-    # 分析师
     if a.get("recommendation"):
         lines.append(f"\n  分析师评级: {a['recommendation']}")
         if a.get("target_price"):
@@ -195,17 +208,16 @@ def format_terminal(data: dict) -> str:
         if a.get("analyst_count"):
             lines.append(f"  分析师数量: {a['analyst_count']}")
 
-    # 业务
     if b.get("sector"):
         lines.append(f"\n  行业: {b.get('sector', '')} / {b.get('industry', '')}")
         lines.append(f"  国家: {b.get('country', '')}")
 
     lines.append(f"\n  数据时间: {data['timestamp']}")
-    lines.append(f"  数据来源: Yahoo Finance")
+    lines.append("  数据来源: Yahoo Finance")
     return "\n".join(lines)
 
 
-def main():
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="美股分析")
@@ -220,7 +232,7 @@ def main():
         sys.exit(1)
 
     if args.json:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print(json_out(data))
     else:
         print(format_terminal(data))
 

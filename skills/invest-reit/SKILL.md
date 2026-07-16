@@ -244,7 +244,7 @@ description: |
 | 场景 | 路由 |
 |------|------|
 | 「分析这只REIT」 | invest-reit |
-| 「分析REITs管理人」 | invest-fund-manager（如适用） |
+| 「分析REITs管理人」 | invest-fund（管理人/策略维度） |
 | 「分析REITs持仓股票」 | invest-stock |
 
 ---

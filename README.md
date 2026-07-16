@@ -24,9 +24,27 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
+## 可选：配置数据源（配置后启用对应能力）
+
+装上就能用**判断框架**。不配任何 API 也能分析（公开检索 + 你提供的材料）。
+
+按需配置后，**对应取数能力才会启用**；取数与下判断分离：
+
+| 你配置了 | 启用的能力 |
+|:---------|:-----------|
+| 东方财富 `EASTMONEY_APIKEY` | `invest-cli`：A股/港股快照、基金快照、自然语言选股 |
+| Python 包 `yfinance` | `invest-cli us` 美股快照 |
+| 本机天天基金类 CLI（如 `ttfund`，自装） | 净值/重仓等公开基金数据，优先喂给 invest-fund |
+
+详细步骤与排错见 **[docs/data-sources.md](docs/data-sources.md)**。
+
+密钥只放本机环境变量或官方安全存储，不要提交到 Git。本仓库不提供券商交易，也不捆绑第三方基金聚合站 skill。
+
+---
+
 ## 这到底是什么
 
-不是数据查询工具，是一套**判断框架**。
+不是纯数据查询工具，是一套**判断框架**（可选取数后端）。
 
 投资最大的坑，不是信息不够，是**不知道该看什么**。这个工具告诉你：看这三样就够了。
 
@@ -113,6 +131,13 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
+## v2.0.2 增量（本版）
+
+- **配置门闩**：东财 Key / yfinance / 可选 ttfund 探测通过后，才启用对应 CLI 取数
+- **invest-cli 加固**：路径可移植、字段别名、JSON 契约、易方达蓝筹映射 **005827**、友好「如何启用」报错
+- **数据源文档**：`docs/data-sources.md`（东财 + 美股 + 天天基金引导）
+- **路由消毒**：公开包仅 9 件套框架 + invest-cli；死链 skill 清理
+
 ## v2.0 功能亮点
 
 ### 个股分析统一入口
@@ -158,7 +183,7 @@ npx skills add taxueseek/fund-investment-guide
 
 ```bash
 python invest_cli.py stock 600519      # A股/港股实时行情+估值
-python invest_cli.py fund 006195      # 基金净值/业绩/费率/重仓
+python invest_cli.py fund 005827      # 基金净值/业绩/费率/重仓（需东财 Key）
 python invest_cli.py us AAPL         # 美股估值/财务/评级
 python invest_cli.py screen "市盈率低于10的银行股"  # 选股
 ```
@@ -286,6 +311,8 @@ python invest_cli.py screen "市盈率低于10的银行股"  # 选股
 ## 项目结构
 
 ```
+docs/
+└── data-sources.md            # 可选数据源：配置后启用
 skills/
 ├── invest/                    # 主入口：自动识别标的类型
 ├── invest-stock/              # 个股分析（三关审查/四维评分/机构深度/港A增强）
@@ -295,7 +322,7 @@ skills/
 ├── invest-reit/               # REITs分析
 ├── invest-allocation/         # 资产配置
 ├── invest-discuss/            # 大师会诊（多视角验证）
-└── invest-cli/                # 投资分析CLI（数据获取+分析框架）
+└── invest-cli/                # 数据适配CLI（东财/yfinance，配置后启用）
 ```
 
 ---
@@ -304,6 +331,7 @@ skills/
 
 | 版本 | 日期 | 变更内容 |
 |:-----|:-----|:---------|
+| v2.0.2 | 2026-07 | 配置门闩 + 数据源引导（东财/yfinance/可选天天基金）；invest-cli 工程加固；公开路由消毒与死链清理 |
 | v2.0 | 2026-06 | 统一框架升级：invest-stock合并原invest-hk-a/invest-us/invest-institutional，invest-fund新增场景路由，新增invest-discuss/invest-cli，移除invest-report/invest-fund-manager/invest-upgrade/zaoren-invest-roundtable |
 | v1.0 | 2026-04 | 全面重构，统一三关审查框架，覆盖股基债商+配置+圆桌 |
 
@@ -343,9 +371,25 @@ The system automatically identifies what you want to analyze and routes to the c
 
 ---
 
+## Optional: Configure data sources (capabilities unlock after setup)
+
+The **judgment framework works immediately** without any API.
+
+Configure sources as needed; **structured fetch enables only after config**:
+
+| You configure | Unlocks |
+|:--------------|:--------|
+| Eastmoney `EASTMONEY_APIKEY` | `invest-cli` stock / fund / screen |
+| Python `yfinance` | `invest-cli us` |
+| Optional local fund CLI (e.g. `ttfund`, user-installed) | Public fund NAV/holdings → feed into invest-fund |
+
+Details: **[docs/data-sources.md](docs/data-sources.md)**. Keep keys on your machine only.
+
+---
+
 ## What This Is
 
-Not a data query tool — it's a **judgment framework**.
+Not only a data tool — a **judgment framework** (optional data backends).
 
 The biggest pitfall in investing isn't lack of information, it's **not knowing what to look at**. This tool tells you: these three things are all you need to check.
 
@@ -472,9 +516,9 @@ Four investment minds examine the same target simultaneously:
 ### Investment Analysis CLI
 
 ```bash
-python invest_cli.py stock 600519      # A/HK stock real-time quotes + valuation
-python invest_cli.py fund 006195      # Fund NAV / performance / fees
-python invest_cli.py us AAPL         # US stock valuation / financials
+python invest_cli.py stock 600519      # A/HK (requires EASTMONEY_APIKEY)
+python invest_cli.py fund 005827      # Fund snapshot (requires EASTMONEY_APIKEY)
+python invest_cli.py us AAPL         # US (requires yfinance)
 python invest_cli.py screen "Bank stocks with PE below 10"
 ```
 
@@ -504,6 +548,8 @@ python invest_cli.py screen "Bank stocks with PE below 10"
 ## Project Structure
 
 ```
+docs/
+└── data-sources.md            # Optional data sources (unlock after config)
 skills/
 ├── invest/                    # Entry: auto-identifies target type
 ├── invest-stock/              # Stock analysis (3-Gate/4-Dimension/Institutional Deep/HK-A)
@@ -513,7 +559,7 @@ skills/
 ├── invest-reit/               # REITs analysis
 ├── invest-allocation/         # Asset allocation
 ├── invest-discuss/            # Masters discussion (multi-perspective validation)
-└── invest-cli/                # Investment CLI (data fetch + analysis framework)
+└── invest-cli/                # Data adapter CLI (Eastmoney/yfinance; config-gated)
 ```
 
 ---
@@ -522,6 +568,7 @@ skills/
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
+| v2.0.2 | 2026-07 | Config gates + data-source guide; invest-cli hardening; public route sanitization |
 | v2.0 | 2026-06 | Unified framework: invest-stock merged HK/US/Institutional, invest-fund scene routing, new invest-discuss/invest-cli |
 | v1.0 | 2026-04 | Initial release, unified 3-gate review framework |
 
