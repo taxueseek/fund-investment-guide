@@ -1,136 +1,205 @@
 ---
 name: invest-cli
 description: |
-  投资分析 CLI — 数据获取 + 分析框架一体化，dual-mode 运行。配置数据源后启用对应子命令。
+  投资分析 CLI — 数据获取 + 分析框架一体化，dual-mode 运行。
 
   触发：「/cli」「/投资cli」「invest cli」「终端分析」「命令行分析」
   或：「用cli分析」「终端查一下」「命令行看看」
 
   也支持直接运行 CLI 脚本：
-  python3 scripts/invest_cli.py stock 600519
+  python ~/.agents/skills/invest-cli/scripts/invest_cli.py stock 600519
 ---
 
-# invest-cli — 数据适配 CLI
+## 完整触发条件（原始 description）
+
+投资分析 CLI — 数据获取 + 分析框架一体化，dual-mode 运行。 触发：「/cli」「/投资cli」「invest cli」「终端分析」「命令行分析」 或：「用cli分析」「终端查一下」「命令行看看」 也支持直接运行 CLI 脚本： python ~/.agents/skills/invest-cli/scripts/invest_cli.py stock 600519
+
+
+# invest-cli — 投资分析 CLI
 
 ## 定位
 
-与 invest 框架 **分离，但鼓励组合**：
-
-| | invest-stock / invest-fund … | invest-cli |
-|--|------------------------------|------------|
-| 职责 | 怎么想（框架） | 怎么取（结构化快照） |
-| 关系 | 消费任意可信数据 | 提供可选数据源（东财 / yfinance） |
-| 是否必须 | 分析要靠框架 | **配置后启用**；不是唯一取数方式 |
+现有 invest 系列 skill 只定义"怎么想"（分析框架），数据靠 web search。
+invest-cli 补充"怎么取"（数据获取），把 CLI 脚本和分析框架串起来。
 
 **dual-mode**：
-
-- Skill 触发 → CLI `--json` → **再套** invest 框架解读（组合）
-- 终端直接运行 → 表格快照
-
-配置说明见仓库 `docs/data-sources.md`。
-
-## 配置门闩（未配置则不启用）
-
-| 子命令 | 启用条件 | 未配置时 |
-|--------|----------|----------|
-| `stock` / `fund` / `screen` | 环境变量 `EASTMONEY_APIKEY` | 退出并提示如何配置以启用 |
-| `us` | 已安装 `yfinance`（可用 skill 内 `.venv`） | 提示安装命令 |
-
-未配置时**不要**编造行情；引导用户完成配置后再重试。
+- Skill 触发 → 调用 CLI 脚本（`--json`）→ 用 invest 系列框架解读 → 输出完整分析报告
+- 终端直接运行 → 输出表格快照
 
 ## 路由逻辑
 
-| 用户意图 | 子命令 |
-|----------|--------|
-| A股/港股代码或名称 | `stock` |
-| 基金代码或名称 | `fund` |
-| 美股 ticker | `us` |
-| 自然语言选股条件 | `screen` |
+1. 识别标的类型（股票/基金/美股/选股）
+2. 调用对应子命令，`--json` 获取结构化数据
+3. 将 JSON 数据传给 invest 系列分析框架
+4. 输出完整分析报告
 
-### stock — A股/港股（需东财 Key）
+## 子命令
+
+### stock — A股/港股分析
 
 ```bash
-python3 scripts/invest_cli.py stock <代码/名称> [--json]
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py stock <代码/名称> [--json]
 ```
 
-- **数据源**：东方财富 claw API（`EASTMONEY_APIKEY`）
+- 数据源：东方财富 API
 - 获取：实时行情 + PE/PB/ROE/毛利率/现金流
-- 字段形状对齐 invest-stock 三关所需指标
-- 内置名称映射：茅台→600519、五粮液→000858 等
+- 分析框架：对标 invest-stock 三关审查（懂不懂 / 好不好 / 贵不贵）
+- 内置名称映射：茅台→600519、五粮液→000858、宁德时代→300750 等
 
-### fund — 基金快照（需东财 Key）
-
-```bash
-python3 scripts/invest_cli.py fund <代码/名称> [--json]
-```
-
-- **数据源**：东财 claw
-- 获取：净值/业绩/风险/费率/经理/重仓
-- 内置名称映射：易方达蓝筹精选→**005827**、中欧医疗→003096 等
-
-### us — 美股快照（需 yfinance）
+### fund — 基金分析
 
 ```bash
-python3 scripts/invest_cli.py us <代码> [--json]
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py fund <代码/名称> [--json]
 ```
 
-- **数据源**：yfinance → Yahoo Finance
-- 字段形状对齐 invest-stock 四维所需指标
+- 数据源：东方财富 API
+- 获取：净值/业绩/风险指标/费率/经理/十大重仓
+- 分析框架：对标 invest-fund 三关审查
+- 内置名称映射：易方达蓝筹→006195、中欧医疗→003096 等
 
-### screen — 选股（需东财 Key）
+### us — 美股分析
 
 ```bash
-python3 scripts/invest_cli.py screen <条件> [--json]
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py us <代码> [--json]
 ```
 
-- **数据源**：东财选股 API
-- 支持自然语言条件，如「市盈率低于10的银行股」
+- 数据源：yfinance（已安装）
+- 获取：估值/财务/分析师评级/风险指标
+- 分析框架：对标 invest-us 四维度（ROE持续性/负债安全/FCF质量/经济护城河）
+
+### screen — 选股
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py screen <条件> [--json]
+```
+
+- 数据源：东方财富选股 API
+- 支持自然语言条件："市盈率低于10的银行股"、"近1年收益>30%的基金"
+
+### datasources — 数据源探测（统一门闩）
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources [--json]
+```
+
+- 列出所有已登记数据源（配置真源 `data-sources.yaml`）及运行时可用性
+- `--json` 供路由：按 `available + priority` 决定用哪个源
+- 任何取数前先探测，禁止猜测某数据源是否可用
+
+### wind — 万得 Wind（机构级）
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind <server_type> <tool> --input '<json>' [--json]
+```
+
+- 透传 wind-mcp-skill 契约工具（stock_data/fund_data/index_data/...）
+- 定位：`WIND_SKILL_DIR` 或 `INVEST_SKILL_ROOTS` 指向 wind skill 目录
+- Key：wind skill 自身的 config（`~/.wind-aifinmarket/config`）
+
+### yingmi — 盈米且慢
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py yingmi <tool> --input '<json>' [--json]
+```
+
+- 透传 `yingmi-skill-cli mcp call` 工具（基金/策略/财富/资讯）
+- 前置：`yingmi-skill-cli init` 完成
+
+### ttfund — 天天基金（场景引擎）
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py ttfund <bond/gold/macro/diagnose/...> [--json]
+```
+
+- 透传 ttfund 场景命令（债券/黄金/宏观/基金诊断/选基/配置/研究）
+- 前置：`ttfund login` 完成（场景取数需登录）
+
+### intent — 意图层（默认取数入口，收敛接口面）
+
+```bash
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py intent <deep/screen/portfolio/plan/macro/present> <参数> [--json]
+```
+
+- 把盈米 69 个 MCP 工具 + Wind 7 类收敛为 6 个语义入口，内部按场景 + 标的类型路由到权威源
+- 接口面小、能力面全；`--json` 输出统一信封（source/ok/data/error）
+- 推荐作为分析 skill 的首选取数方式；wind/yingmi/ttfund 透传仅作高级/调试
 
 ## Skill 触发后的执行流程
 
-1. 识别子命令与代码  
-2. **先检查配置门闩**；未通过则输出配置引导并停止  
-3. 调用 CLI `--json`  
-4. 将 JSON 交给 invest-stock / invest-fund 等框架解读  
+1. **识别标的类型**：根据用户输入关键词判断 stock/fund/us/screen
+2. **调用 CLI**：执行对应子命令，`--json` 模式获取数据
+3. **解读数据**：
+   - stock → 按 invest-stock 三关框架输出分析报告
+   - fund → 按 invest-fund 三关框架输出分析报告
+   - us → 按 invest-us 四维度框架输出分析报告
+   - screen → 直接输出选股结果表格
+4. **补充分析**：CLI 数据 + invest 框架 = 完整分析报告
 
-### 示例
+## 示例
 
-```
-用户：「/cli 茅台」且已配置东财
-→ invest_cli.py stock 600519 --json → invest-stock 三关报告
+### Skill 触发示例
 
-用户：「/cli AAPL」且已装 yfinance
-→ invest_cli.py us AAPL --json → 四维/框架解读
-```
+用户：「/cli 分析一下茅台」
+→ 识别为 stock → 调用 `invest_cli.py stock 600519 --json`
+→ 解析 JSON → 按 invest-stock 三关框架输出分析报告
 
-## Path resolution
+用户：「/cli 帮我看看 006195 这只基金」
+→ 识别为 fund → 调用 `invest_cli.py fund 006195 --json`
+→ 解析 JSON → 按 invest-fund 三关框架输出分析报告
+
+用户：「/cli 看看 AAPL」
+→ 识别为 us → 调用 `invest_cli.py us AAPL --json`
+→ 解析 JSON → 按 invest-us 四维度框架输出分析报告
+
+### 终端直接运行示例
 
 ```bash
-cd /path/to/invest-cli   # skill 根
-python3 scripts/invest_cli.py stock 600519 --json
+$ python ~/.agents/skills/invest-cli/scripts/invest_cli.py stock 600519
+============================================================
+  贵州茅台（600519）— 行情快照
+============================================================
 
-export INVEST_CLI=/path/to/invest_cli.py
-# 或
-export INVEST_CLI_ROOT=/path/to/invest-cli
+  指标              数值
+  ------------------------------
+  最新价           1680.00
+  涨跌幅             1.23%
+  市盈率PE          28.50
+  ...
+
+$ python ~/.agents/skills/invest-cli/scripts/invest_cli.py us AAPL
+============================================================
+  Apple Inc.（AAPL）— 美股快照
+============================================================
+  ...
 ```
 
-禁止写死 `/Users/<name>/`。系统 Python 若无 yfinance，会自动尝试 skill 内 `.venv`（见 `requirements.txt`）。
+## 与现有 invest 系列的关系
+
+| 能力 | invest 系列 | invest-cli |
+|------|------------|------------|
+| 分析框架 | ✅ 完整 | 复用 invest 系列 |
+| 数据获取 | ❌ 靠 web search | ✅ CLI 脚本 |
+| 终端直接运行 | ❌ | ✅ |
+| 触发方式 | 自然语言 | /cli + 自然语言 |
+
+**invest-cli 不替代 invest 系列，是补充**。当用户想用 CLI 或明确说"/cli"时走 invest-cli，否则走原有 invest 系列。
+
+## 数据源接入（统一门闩）
+
+数据源声明真源为 `data-sources.yaml`，可用性由 `invest-cli datasources` 运行时探测。各源启用条件：
+
+| 数据源 | 启用条件 | 覆盖 |
+| --- | --- | --- |
+| 东方财富 | `EASTMONEY_APIKEY` | stock/fund/screen |
+| yfinance | `pip3 install yfinance` | us |
+| 万得 Wind | 定位 wind skill + key | stock/fund/index/bond/news/macro |
+| 盈米且慢 | `yingmi-skill-cli init` 完成 | fund/strategy/wealth/news |
+| 天天基金 | 本机 `ttfund`（可选） | fund |
+
+能力矩阵与详细配置见 `docs/data-sources.md`。取数与降级：单一场景优先最高优先级源，关键字段缺失或出错才降级，不重复调用。
 
 ## 环境要求
 
+- `EASTMONEY_APIKEY`：东方财富 API Key（stock/fund/screen 必须）
+- `yfinance`：Python 包（us 已安装）
 - Python 3.10+
-- `EASTMONEY_APIKEY`：启用 stock / fund / screen
-- `yfinance`、`requests`：见 `requirements.txt`（建议 `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
-
-## JSON 契约
-
-所有子命令 `--json` 提供扁平 `data` 字段（stock/fund/us 一致），便于 Agent 消费。  
-美股额外保留 `quote` / `financial` 分区。
-
-## Changelog
-
-**v2.0.2** — 配置门闩文案；字段别名；路径可移植；蓝筹映射 005827；venv reexec；契约测试
-
----
-
-*invest-cli v2.0.2 | 配置后启用 · 与框架分离可组合*

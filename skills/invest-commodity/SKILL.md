@@ -233,4 +233,10 @@ description: |
 
 ---
 
-*invest-commodity v1.0 | 三关审查*
+## 黄金增强：十维度评分
+
+分析黄金时，在三关审查外叠加十维度量化评分并输出信号（见 `references/commodity-gold.md`）。数据由 invest-cli 提供（`ttfund gold` 或 Wind），注意时效字段（is_stale/is_backfilled）。
+
+---
+
+*invest-commodity v1.1 | 三关审查 + 黄金十维度*

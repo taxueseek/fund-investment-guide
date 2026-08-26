@@ -1,0 +1,76 @@
+# data-sources.yaml — invest-cli 数据源配置真源
+#
+# 工程纪律（参考 argo config.yaml）：
+#   1. 数据源声明只在本文件维护；scripts/sources/*.py 只读取本文件，不重复定义硬编码数据源。
+#   2. 新增/修改数据源只改本文件 + 必要时新增 scripts/sources/<id>.py 适配器。
+#   3. 探测可用性统一走 scripts/sources/registry.py 的 detect_all()，CLI 不会自行判断。
+#
+# 字段说明：
+#   kind      数据源类型: api=HTTP API / cli=外部 CLI / python=python 包
+#   coverage  覆盖的标的/场景（语义标签，供能力矩阵与路由参考）
+#   priority  优先级（数字越大越优先，用于路由与降级排序）
+#   detect    可用性探测方式:
+#               type=env      检查环境变量
+#               type=python   检查可导入模块
+#               type=command  执行命令并匹配 check 子串（false 匹配表示不可用）
+#               type=dir      查找指定 skill 目录 + 可选 key 文件
+#   adapters  对应 scripts/sources/ 下的适配器模块名
+
+version: 1
+
+sources:
+  eastmoney:
+    name: 东方财富
+    kind: api
+    coverage: [stock, fund, screen]
+    priority: 50
+    env_var: EASTMONEY_APIKEY
+    detect:
+      type: env
+      var: EASTMONEY_APIKEY
+    adapters: [eastmoney]
+
+  yfinance:
+    name: Yahoo Finance
+    kind: python
+    coverage: [us]
+    priority: 40
+    detect:
+      type: python
+      module: yfinance
+    adapters: [yfinance]
+
+  wind:
+    name: 万得 Wind
+    kind: cli
+    coverage: [stock, fund, index, bond, news, macro, analytics]
+    priority: 80
+    env_var: WIND_SKILL_DIR
+    detect:
+      type: dir
+      skill: wind-mcp-skill
+      env_dir: WIND_SKILL_DIR
+      key_hint: [~/.wind-aifinmarket/config]
+    adapters: [wind]
+
+  yingmi:
+    name: 盈米且慢
+    kind: cli
+    coverage: [fund, strategy, wealth, news]
+    priority: 70
+    detect:
+      type: command
+      cmd: [yingmi-skill-cli, init, status]
+      check: '"hasApiKey": true'
+    adapters: [yingmi]
+
+  ttfund:
+    name: 天天基金
+    kind: cli
+    coverage: [fund, bond, gold, macro, strategy, allocate, research]
+    priority: 30
+    detect:
+      type: command
+      cmd: [ttfund, status]
+      check: ""
+    adapters: [ttfund]

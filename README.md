@@ -131,7 +131,7 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
-## v2.0.2 增量（本版）
+## v2.0.5 增量（本版）
 
 - **配置门闩**：东财 Key / yfinance / 可选 ttfund 探测通过后，才启用对应 CLI 取数
 - **invest-cli 加固**：路径可移植、字段别名、JSON 契约、易方达蓝筹映射 **005827**、友好「如何启用」报错
@@ -331,6 +331,7 @@ skills/
 
 | 版本 | 日期 | 变更内容 |
 |:-----|:-----|:---------|
+| v2.0.5 | 2026-08 | 统一多源数据层（invest-cli 接入 Wind/盈米/东财/yfinance/天天基金 + argo 财经垂直源；intent 意图层收敛接口面、datasources 探测）；新增 invest-bond/invest-macro；黄金十维度并入 invest-commodity；合并 invest-hk-a/us/institutional 进 invest-stock，单一入口降 token |
 | v2.0.2 | 2026-07 | 配置门闩 + 数据源引导（东财/yfinance/可选天天基金）；invest-cli 工程加固；公开路由消毒与死链清理 |
 | v2.0 | 2026-06 | 统一框架升级：invest-stock合并原invest-hk-a/invest-us/invest-institutional，invest-fund新增场景路由，新增invest-discuss/invest-cli，移除invest-report/invest-fund-manager/invest-upgrade/zaoren-invest-roundtable |
 | v1.0 | 2026-04 | 全面重构，统一三关审查框架，覆盖股基债商+配置+圆桌 |
@@ -568,6 +569,7 @@ skills/
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
+| v2.0.5 | 2026-08 | Unified multi-source data layer (invest-cli: Wind/YingMi/Eastmoney/yfinance/ttfund + argo finance verticals; intent intent-layer convergence; datasources probe); new invest-bond/invest-macro; gold 10-dimension merged into invest-commodity; merged invest-hk-a/us/institutional into invest-stock (single entry, lower token) |
 | v2.0.2 | 2026-07 | Config gates + data-source guide; invest-cli hardening; public route sanitization |
 | v2.0 | 2026-06 | Unified framework: invest-stock merged HK/US/Institutional, invest-fund scene routing, new invest-discuss/invest-cli |
 | v1.0 | 2026-04 | Initial release, unified 3-gate review framework |

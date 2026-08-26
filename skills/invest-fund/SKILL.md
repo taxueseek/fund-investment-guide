@@ -344,24 +344,23 @@ description: |
 
 ---
 
-## 数据获取优先序（配置后启用，不绑死厂商）
+## 数据搜索指引
 
-在填三关表之前，按下列顺序取结构化数据（**探测到才用，调不到就跳过**）：
+**必须获取（Tier 1）**：
+- 基金N年年报/半年报（投资组合、费率、经理报告）
+- 当前净值、规模（实时）
+- 业绩基准及历史对比
 
-| 优先级 | 条件 | 来源 | 适用 |
-|--------|------|------|------|
-| 1 | 本机存在 `ttfund` 命令（用户自装） | `ttfund diagnose/info/holding/manager` 等 | 净值、规模、重仓、经理 |
-| 2 | 已设置 `EASTMONEY_APIKEY` | `invest-cli fund <code> --json` | 东财基金快照 |
-| 3 | 始终 | web_search / 年报 PDF / 用户材料 | CLI 全不可用时的兜底 |
+**验证获取（Tier 2）**：
+- 近5年业绩排名
+- 经理任职历史
+- 风险调整后收益指标（夏普、卡玛比率）
+- 重仓股估值数据
 
-配置步骤见仓库 `docs/data-sources.md`。  
-**禁止**调用未声明的第三方聚合站 skill；本公开包不包含此类依赖。
-
-**内容清单（仍按 Tier 填齐，来源可变）**：
-
-**必须（Tier 1）**：年报/半年报组合与费率、当前净值与规模、业绩基准对比  
-**验证（Tier 2）**：近5年排名、经理任职史、夏普/卡玛、重仓股估值  
-**交叉（Tier 3）**：同类费率、行业估值分位、经理其他产品
+**交叉核对（Tier 3）**：
+- 同类基金费率比较
+- 行业主题估值分位
+- 经理其他产品表现
 
 ---
 
@@ -369,11 +368,10 @@ description: |
 
 | 场景 | 路由 |
 |------|------|
-| 「分析这只基金」「值不值得」 | **invest-fund**（本 skill） |
+| 「分析这只基金」 | invest-fund |
 | 「分析这只股票」 | invest-stock |
-| 「解读基金季报」 | 本 skill + `references/doc-processing.md` |
-| 「/cli 查基金快照」 | invest-cli fund（需东财 Key） |
-| 「终端查净值」且已装 ttfund | 先 ttfund 取数，再本 skill 判断 |
+| 「解读基金季报」 | invest-report |
+| 「基金经理筛选」 | invest-fund-manager |
 
 ---
 
@@ -383,7 +381,6 @@ description: |
 2. **不预测排名**：不判断明年业绩第几，只评估持续跑赢能力
 3. **不保证收益**：过往业绩不代表未来，需自行承担风险
 4. **成本优先**：高费率是长期收益的最大敌人
-5. **先取数再判断**：已配置 CLI 时禁止空表硬编指标
 
 ---
 
@@ -400,4 +397,14 @@ description: |
 | 文档处理协作 | `references/doc-processing.md` | 按需 |
 | 基金经理共性框架 | `../invest-stock/references/manager-patterns.md` | 按需 |
 
-*invest-fund v2.0.2 | 场景路由 · 配置后取数*
+*invest-fund v2.0 | 场景路由优先 · 核心方法论 · 持有检查 · 场景优先级*
+
+---
+
+## 数据获取（invest-cli）
+
+取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
+
+1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
+3. 标注数据来源，口径不一致不合并

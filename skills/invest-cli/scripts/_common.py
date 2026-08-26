@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import hashlib
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Dict, List, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def ensure_script_dir_on_path() -> Path:
@@ -144,3 +147,156 @@ def pick_screen_columns(all_keys: list[str], limit: int = 6) -> list[str]:
     if not picked:
         return all_keys[:limit]
     return picked[:limit]
+
+
+# ═══ 缓存系统 ═══
+_CACHE_DIR = Path.home() / ".cache" / "invest-cli"
+_CACHE_TTL = 300  # 5分钟
+
+def _get_cache_key(prefix: str, *args) -> str:
+    """生成缓存键"""
+    key_str = f"{prefix}:{':'.join(str(a) for a in args)}"
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+def get_cached(prefix: str, *args) -> Optional[Dict]:
+    """获取缓存数据"""
+    cache_key = _get_cache_key(prefix, *args)
+    cache_file = _CACHE_DIR / f"{cache_key}.json"
+    
+    if not cache_file.exists():
+        return None
+    
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        
+        # 检查是否过期
+        if time.time() - cached.get("timestamp", 0) > _CACHE_TTL:
+            return None
+        
+        return cached.get("data")
+    except (json.JSONDecodeError, IOError):
+        return None
+
+def set_cached(prefix: str, data: Any, *args) -> None:
+    """设置缓存数据"""
+    cache_key = _get_cache_key(prefix, *args)
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = _CACHE_DIR / f"{cache_key}.json"
+    
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "timestamp": time.time(),
+                "data": data,
+                "prefix": prefix,
+                "args": list(args),
+            }, f, ensure_ascii=False)
+    except IOError:
+        pass  # 缓存写入失败不影响主流程
+
+
+# ═══ 并行执行 ═══
+def parallel_execute(tasks: List[Callable], max_workers: int = 3) -> List[Any]:
+    """并行执行多个任务
+    
+    Args:
+        tasks: 任务列表，每个任务是一个无参数的可调用对象
+        max_workers: 最大并行数
+    
+    Returns:
+        任务结果列表，顺序与输入一致
+    """
+    results = [None] * len(tasks)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_index = {executor.submit(task): i for i, task in enumerate(tasks)}
+        
+        # 收集结果
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                results[index] = future.result()
+            except Exception as e:
+                results[index] = e
+    
+    return results
+
+
+# ═══ 东财 API 增强 ═══
+def query_eastmoney_parallel(queries: List[str], api_key: str = None) -> List[Dict]:
+    """并行查询东财 API
+    
+    Args:
+        queries: 查询字符串列表
+        api_key: API 密钥（如果为 None，从环境变量获取）
+    
+    Returns:
+        查询结果列表
+    """
+    import requests
+    
+    if api_key is None:
+        api_key = os.getenv("EASTMONEY_APIKEY")
+        if not api_key:
+            raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
+    
+    url = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
+    
+    def single_query(query: str) -> Dict:
+        resp = requests.post(
+            url,
+            headers={"apikey": api_key, "Content-Type": "application/json"},
+            json={"toolQuery": query},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+        eastmoney_ensure_ok(raw, context=f" ({query[:20]}...)")
+        return raw
+    
+    # 并行执行查询
+    tasks = [lambda q=q: single_query(q) for q in queries]
+    return parallel_execute(tasks)
+
+
+def eastmoney_query_with_cache(query: str, cache_prefix: str = "em", api_key: str = None) -> Dict:
+    """带缓存的东财 API 查询
+    
+    Args:
+        query: 查询字符串
+        cache_prefix: 缓存前缀
+        api_key: API 密钥
+    
+    Returns:
+        查询结果
+    """
+    # 尝试从缓存获取
+    cached = get_cached(cache_prefix, query)
+    if cached is not None:
+        return cached
+    
+    # 执行查询
+    import requests
+    
+    if api_key is None:
+        api_key = os.getenv("EASTMONEY_APIKEY")
+        if not api_key:
+            raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
+    
+    url = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
+    resp = requests.post(
+        url,
+        headers={"apikey": api_key, "Content-Type": "application/json"},
+        json={"toolQuery": query},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    raw = resp.json()
+    eastmoney_ensure_ok(raw, context=f" ({query[:20]}...)")
+    
+    # 缓存结果
+    set_cached(cache_prefix, raw, query)
+    
+    return raw

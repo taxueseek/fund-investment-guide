@@ -244,7 +244,7 @@ description: |
 | 场景 | 路由 |
 |------|------|
 | 「分析这只REIT」 | invest-reit |
-| 「分析REITs管理人」 | invest-fund（管理人/策略维度） |
+| 「分析REITs管理人」 | invest-fund-manager（如适用） |
 | 「分析REITs持仓股票」 | invest-stock |
 
 ---
@@ -260,3 +260,13 @@ description: |
 ---
 
 *invest-reit v1.0 | 三关审查 | 动态时间算法*
+
+---
+
+## 数据获取（invest-cli）
+
+取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
+
+1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
+3. 标注数据来源，口径不一致不合并
