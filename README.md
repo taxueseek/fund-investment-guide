@@ -35,6 +35,9 @@ npx skills add taxueseek/fund-investment-guide
 | 东方财富 `EASTMONEY_APIKEY` | `invest-cli`：A股/港股快照、基金快照、自然语言选股 |
 | Python 包 `yfinance` | `invest-cli us` 美股快照 |
 | 本机天天基金类 CLI（如 `ttfund`，自装） | 净值/重仓等公开基金数据，优先喂给 invest-fund |
+| 检索工具 [argo](https://github.com/taxueseek/argo)（自装） | `invest-cli info` 资讯/舆情、`intent macro` 宏观走财经垂直源，多数免 Key，省结构化源配额 |
+
+**和 argo 的分工**：盈米 / Wind / 东财管「精确数值」，argo 管「检索资讯」——资讯、舆情、宏观背景优先走 argo 省配额，结构化源失败时也由它兜底（结果需核验）。argo 是可选项，没装则自动跳过，不影响其他能力。
 
 详细步骤与排错见 **[docs/data-sources.md](docs/data-sources.md)**。
 
