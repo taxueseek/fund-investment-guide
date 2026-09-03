@@ -40,7 +40,7 @@
 
 ### Step 0：获取一致预期数据
 
-用 eastmoney / web_search 获取：
+用 invest-cli（`intent` `wind` `info`） / web_search 获取：
 
 - 一致预期 EPS（未来 1-2 年）
 - 一致预期营收（未来 1-2 年）
@@ -258,4 +258,4 @@
 
 ---
 
-*一致预期参考 v1.0 · 共识结构分析 · 分歧来源 · 预期差定位 · 依赖 eastmoney*
+*一致预期参考 v1.0 · 共识结构分析 · 分歧来源 · 预期差定位 · 依赖 invest-cli*

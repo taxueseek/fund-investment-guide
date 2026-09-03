@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A股/港股分析 - 东方财富数据源
+A股/港股分析 - 快照走 route.fetch（同花顺主路，失败整单回退东财）
 输出：实时行情 + 估值指标 + 财务数据（对标 invest-stock 三关框架）
 """
 
@@ -14,9 +14,12 @@ EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
 
 def get_api_key():
-    key = os.getenv("EASTMONEY_APIKEY")
+    """env 优先，无则读用户级凭据文件（单一实现：sources/eastmoney.load_api_key）。"""
+    from sources.eastmoney import load_api_key
+
+    key = load_api_key()
     if not key:
-        raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
+        raise RuntimeError("未设置 EASTMONEY_APIKEY（可写入 ~/.config/invest-cli/eastmoney.env）")
     return key
 
 

@@ -1,7 +1,9 @@
 """盈米且慢（yingmi-skill-cli）数据源适配器。
 
 封装 `yingmi-skill-cli mcp call <toolName> --input '<json>'`。
-- 成功：stdout 为 {"success": true, "data": {...}}
+- 成功信封：stdout 为 {"success": true, "data": {...}}
+- 数组直返：批量/列表类工具（GetPopularFund、Batch*、Search*）stdout 直接是 [{...}]
+- 业务对象直返：部分工具（如 GetFundDiagnosis）直接返回业务 dict，无 success 字段
 - 失败/无结果：stdout 或 stderr 为人类可读文本（部分业务失败返回明确文本）
 - 只还原 yingmi 返回值与错误，不做业务判断。
 """
@@ -38,20 +40,23 @@ def call(tool_name: str, params: Optional[dict] = None, params_json: Optional[st
     raw = (proc.stdout or "").strip()
     err_txt = (proc.stderr or "").strip()
 
-    # 优先尝试解析 stdout 为 JSON 信封
-    if raw.startswith("{"):
+    # 优先尝试解析 stdout 为 JSON（信封对象 / 业务对象 / 数组直返）
+    if raw.startswith(("{", "[")):
         try:
-            env = json.loads(raw)
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
-            env = None
-        if isinstance(env, dict):
-            if env.get("success") is True:
-                return {"source": "yingmi", "ok": True, "data": env.get("data"), "error": None}
-            if env.get("success") is False:
-                msg = env.get("message") or env.get("error") or raw
+            parsed = None
+        if isinstance(parsed, list):
+            # 批量/列表类工具（GetPopularFund、Batch*、Search*）直接返回数组
+            return {"source": "yingmi", "ok": True, "data": parsed, "error": None}
+        if isinstance(parsed, dict):
+            if parsed.get("success") is True:
+                return {"source": "yingmi", "ok": True, "data": parsed.get("data"), "error": None}
+            if parsed.get("success") is False:
+                msg = parsed.get("message") or parsed.get("error") or raw
                 return {"source": "yingmi", "ok": False, "data": None, "error": f"盈米调用失败: {msg}"}
             # 无 success 字段：盈米部分工具直接返回业务对象（如 GetFundDiagnosis）
-            return {"source": "yingmi", "ok": True, "data": env, "error": None}
+            return {"source": "yingmi", "ok": True, "data": parsed, "error": None}
 
     # 非 JSON：取退出码与文本作为错误
     detail = raw or err_txt

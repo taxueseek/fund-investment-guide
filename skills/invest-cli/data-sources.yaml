@@ -42,14 +42,16 @@ sources:
     priority: 50
     env_var: EASTMONEY_APIKEY
     detect:
-      type: env
-      var: EASTMONEY_APIKEY
+      type: env_or_file
+      files:
+        - ~/.config/invest-cli/eastmoney.env
+        - ~/Library/Application Support/invest-cli/eastmoney.env
     adapters: [eastmoney]
 
   yfinance:
     name: Yahoo Finance
     kind: python
-    coverage: [us]
+    coverage: [us, stock]
     priority: 40
     detect:
       type: python
@@ -92,6 +94,8 @@ sources:
   ttskill:
     name: 天天基金(官方) ttskill（可选深取引擎）
     kind: cli
+    # coverage 仅指快照链 kind（fund()）；37 个官方业务包全部经
+    # `invest-cli ttskill <skill_id>` 透传可达，清单见 `invest-cli capabilities ttskill`。
     coverage: [fund]
     priority: 55
     detect:
@@ -109,3 +113,16 @@ sources:
       type: env_or_file
       files: []
     adapters: [argo]
+
+  fred:
+    name: FRED 宏观时序（净流动性三序列：WALCL/TGA/ON RRP）
+    kind: api
+    coverage: [macro]
+    priority: 25
+    env_var: FRED_API_KEY
+    detect:
+      type: env_or_file
+      files:
+        - ~/.config/invest-cli/fred.env
+        - ~/Library/Application Support/invest-cli/fred.env
+    adapters: [fred]

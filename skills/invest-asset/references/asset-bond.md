@@ -76,7 +76,7 @@
 
 ```bash
 # 债券（intent deep bond → wind bond_data）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py intent deep bond <代码或名称>
+invest-cli intent deep bond <代码或名称>
 ```
 
 ---

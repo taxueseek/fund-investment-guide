@@ -30,6 +30,12 @@ def test_fallback_fraction_raw() -> None:
     assert abs(got - 0.0235) < 1e-9
 
 
+def test_fallback_percent_one_boundary() -> None:
+    """1.0 边界：1.x 百分数最小合法值 1.00%（=1.0），不得当小数放大成 100%。"""
+    got = normalize_dividend_yield({"dividendYield": 1.0}, None)
+    assert abs(got - 0.01) < 1e-9
+
+
 def test_missing_and_zero_price() -> None:
     assert normalize_dividend_yield({}, None) is None
     assert normalize_dividend_yield({"dividendYield": None}, 100.0) is None

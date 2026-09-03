@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-基金分析 - 东方财富数据源
+基金分析 - 快照走 route.fetch（同花顺主路，ttskill 深取补充，失败回退东财）
 输出：净值 + 业绩 + 持仓 + 经理 + 费率（对标 invest-fund 三关框架）
 """
 
@@ -14,9 +14,12 @@ EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
 
 def get_api_key():
-    key = os.getenv("EASTMONEY_APIKEY")
+    """env 优先，无则读用户级凭据文件（单一实现：sources/eastmoney.load_api_key）。"""
+    from sources.eastmoney import load_api_key
+
+    key = load_api_key()
     if not key:
-        raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
+        raise RuntimeError("未设置 EASTMONEY_APIKEY（可写入 ~/.config/invest-cli/eastmoney.env）")
     return key
 
 
@@ -73,10 +76,44 @@ def resolve_fund_code(keyword: str) -> str:
 
 
 def fetch_fund_with_fallback(keyword: str) -> dict:
-    """公募基金快照：route.pick 选源，整单回退。盈米诊断不在这条链（无 fund()）。"""
-    from sources.route import fetch, unwrap_snapshot
+    """公募基金快照：route.pick 选源，整单回退。ttskill 就绪时深取补充。
 
-    return unwrap_snapshot(fetch("fund", keyword))
+    深取是独立子问题（同类分位/机构占比/波动/夏普等 hithink 不提供的字段），
+    只并入主源缺失的键，不覆盖、不跨源拼接同一字段。
+    深取失败静默跳过（快照不受影响）。
+    """
+    from sources.route import fetch, unwrap_snapshot
+    from sources import load_registry
+    from sources.registry import detect as detect_conf
+
+    snap = unwrap_snapshot(fetch("fund", keyword))
+    conf = load_registry().get("ttskill")
+    if not conf:
+        return snap
+    ok, _detail = detect_conf(conf)
+    if not ok:
+        return snap
+    try:
+        from sources import ttskill as tts_src
+
+        res = tts_src.fund(keyword)
+    except Exception:
+        return snap
+    if not res.get("ok") or not isinstance(res.get("data"), dict):
+        return snap
+    deep = (res["data"] or {}).get("data") or {}
+    if not deep:
+        return snap
+    existing = snap.get("data") or {}
+    added = [k for k, v in deep.items() if k not in existing and v not in (None, "")]
+    if not added:
+        return snap
+    snap["data"] = {**existing, **{k: deep[k] for k in added}}
+    snap["deep_source"] = "ttskill"
+    snap["warnings"] = list(snap.get("warnings") or []) + [
+        f"深取字段（{'、'.join(added)}）来自 ttskill"
+    ]
+    return snap
 
 
 def fetch_fund_data(code: str) -> dict:
@@ -139,7 +176,7 @@ def format_terminal(data: dict) -> str:
     # 基础
     lines.append(f"\n  {'基础信息':<14} {'数值':>16}")
     lines.append(f"  {'-' * 32}")
-    for api_key, label in [("基金类型", "类型"), ("成立日期", "成立日期"), ("基金规模", "规模"), ("基金管理人", "管理人")]:
+    for api_key, label in [("基金类型", "类型"), ("成立日期", "成立日期"), ("基金规模", "规模"), ("基金管理人", "管理人"), ("机构占比", "机构占比")]:
         val = d.get(api_key)
         if val is None or val == "":
             val = "-"
@@ -151,6 +188,7 @@ def format_terminal(data: dict) -> str:
     perf_keys = [
         ("单位净值", "最新净值"), ("近1月回报", "近1月"), ("近3月回报", "近3月"),
         ("近6月回报", "近6月"), ("近1年回报", "近1年"), ("近3年回报", "近3年"), ("今年来回报", "今年来"),
+        ("近1年同类分位", "近1年同类分位"), ("近3年同类分位", "近3年同类分位"),
     ]
     has_perf = any(d.get(k) for k, _ in perf_keys)
     if has_perf:

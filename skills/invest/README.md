@@ -5,7 +5,7 @@
 
 ---
 
-## 技能清单（v2.2）
+## 技能清单（v2.3）
 
 | 技能 | 职责 | 入口问法 |
 |------|------|---------|
@@ -75,6 +75,7 @@ ln -s "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py" ~/.local/bin/inves
 
 | 版本 | 说明 |
 |------|------|
+| v2.3 | 消融式维护：.codex 注册链对齐（删 3 死链补 6 缺失，四套链 9/9）、死路由清理（discuss/analyst/fund）、退役文档对齐（cli-runtime 重写、design 稿归档）、命令路径统一 |
 | v2.2 | 薄单品种四合一：invest-bond/convertible/commodity/reit → invest-asset（同一三关模板×四种资产参数，注册数 12→9） |
 | v2.1 | 口径统一（cli-runtime 以入口映射表为真源）、回归修复（analyst 路由/导航表）、死引用与断链清理、references 相对 symlink 收敛、invest-cli 命令入口化 |
 | v2.0 | 真源归并 `_shared`、接入 invest-analyst、任务后导航、维护机制 |

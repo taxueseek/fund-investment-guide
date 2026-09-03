@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.3（2026-09-03 · 消融式维护）
+
+本次按「第一性原理 + MECE + 消融实验」梳理系列，只处理经实验证据证明有价值或损坏的项，删无可证明必要性的复杂性。
+
+- **注册链对齐**：`.codex` 注册链残留 3 个死链（invest-commodity/convertible/reit，指向已删源目录）已删，补齐缺失 6 技能（invest/asset/cli/discuss/macro/stock + fund）。四套链（`.agents` 真源 / `.claude` / `.zcode` / `.codex`）现全部 9/9 对齐。消融证据：`find -xtype l` 死链接扫描为零。
+- **死路由清理（消融确认的真实断链）**：
+  - invest-discuss 下游路由 `invest-us`（已归档）、`invest-hk-a`（已并入 stock）改指 `invest-stock` / `invest-asset`
+  - invest-analyst 下游 `eastmoney`（已删，功能并入 invest-cli）、`market-analysis-radar`（已并入 macro）、能力确认列表同步改指 `invest-macro`/`invest-cli`
+  - invest-fund 「言行一致」引用 `references/manager-patterns.md`（相对本目录断裂）统一为跨目录 `../invest-stock/references/manager-patterns.md`，与同文件 403 行一致
+- **跨技能引用补前缀**：invest-cli SKILL/docs 中指向 invest-fund 口径真源的 `references/data-pipeline.md` 补全为 `invest-fund/references/data-pipeline.md`，消除 agent 按字面路径解析失败的风险。
+- **过期文档对齐退役现状**：
+  - 重写 `invest/references/cli-runtime.md`：删 ttfund/fundfof/fundscreen 全篇活性引用（2026-09-03 已退役），改为只声明「登录态源 + 搜索技能」两类外部依赖，并记录运行时数据源可用性矩阵
+  - `invest/_shared/invest-asset-merge-design.md`（v2.2 已完成）归档 `.trash/`
+- **命令路径统一**：invest-macro / invest-asset(asset-bond) 内硬编码家目录 `python ~/.agents/...` 改统一 `invest-cli` 命令（PATH 优先 + $HOME 兜底），符合 cli-runtime「禁止写死个人家目录」约定
+- **隐藏能力文档化**：invest-cli `watchlist` 子命令（本地自选股，复用 route.fetch）此前有实现无文档，SKILL 补齐命令说明（不依赖外部登录态）
+- **消融实验放行/不放行的判定**（不删项）：
+  - 8 个数据源适配器各有测试覆盖（11 个 test 文件 67 测全绿），无孤儿组件，全部保留
+  - 入口 table 所有路由目标技能齐全；9 技能 frontmatter 完整可触发——路由正确性消融通过
+  - 端到端冒烟：`stock 600519`(茅台，hithink)、`fund 110011`(易方达优质精选，hithink)、`intent macro`(argo) 真实取数全部成功
+  - 6 个分析 SKILL 头部「数据获取」段保留：每段含本技能特有命令（asset 用 `intent deep bond/commodity`、macro 用 `intent macro`），删整段会破坏自包含，非纯冗余
+
 ## v2.2（2026-09-03）
 
 - **薄单品种四合一**：invest-bond / invest-convertible / invest-commodity / invest-reit 合并为 invest-asset（同一「三关审查」骨架 × 四种资产参数），资产细则下沉到 `invest-asset/references/asset-{bond,convertible,commodity,reit}.md` + `commodity-gold.md`

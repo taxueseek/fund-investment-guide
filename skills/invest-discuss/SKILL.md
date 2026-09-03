@@ -64,10 +64,10 @@ description: |
 
 | 结论 | 下一步 |
 |------|--------|
-| 需深度个股分析 | invest-stock / invest-us |
+| 需深度个股分析（含美股） | invest-stock |
 | 需基金分析 | invest-fund |
 | 需配置方案 | invest-allocation |
-| 需港A股政策分析 | invest-hk-a |
+| 需单个资产类判断 | invest-asset |
 
 ---
 

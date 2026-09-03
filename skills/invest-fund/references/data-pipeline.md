@@ -12,7 +12,9 @@ hithink（同花顺，自带主路，费用明细全）→ ttskill（官方可�
 - ttskill 登录态失效时 detect 探测不过，自动跳过；恢复：终端跑 `ttskill login`，用户扫码后重试
 - ttskill 优势：风险族（夏普/波动/回撤+同类排名）、阶段涨幅同类分位、经理解析（代表作/在管列表）；短板：管理费/托管费不在返回中，费率分析需 f10 档案页补查并标注来源
 
-## 调用矩阵（适配器内部已封装，直连时参考）
+## 调用矩阵（适配器内部已封装；分析场景一律走 invest-cli，直连仅作口径参考）
+
+> 生产路径：基金深取 `invest-cli fund <代码>`；经理/净值/估值等扩展包 `invest-cli ttskill <skill_id> --input '<json>'`（37 包透传，2026-09-03 起）。以下直连命令只用于核对字段契约。
 
 | 目的 | 命令 |
 |------|------|
@@ -21,7 +23,7 @@ hithink（同花顺，自带主路，费用明细全）→ ttskill（官方可�
 | 重仓+行业+资产配置 | `ttskill invoke TTFUND_HOLDING_INFO --action query --body '{"fund_id":"163406","holding_type":"stock","period_mode":"latest"}'` |
 | 经理画像+在管列表 | `ttskill invoke TTFUND_MANAGER_INFO --action query --body '{"manager_name":"谢治宇"}'` |
 
-扩展（按需）：`TTFUND_NAV_INFO`（历史净值）、`TTFUND_VALUATION_MAP`（指数/行业估值分位）、`TTFUND_SIMILAR_FUND_SELECT`（同风格替代，仅主动权益）。
+扩展（按需，均走 `invest-cli ttskill` 透传）：`TTFUND_NAV_INFO`（历史净值）、`TTFUND_VALUATION_MAP`（指数/行业估值分位）、`TTFUND_STOCK_PRICE_QUERY`（实时行情）、`TTFUND_MACRO_DATA`（中美宏观）、`TTFUND_SIMILAR_FUND_SELECT`（同风格替代，仅主动权益）。全套 37 包清单与参数：`invest-cli capabilities ttskill`。
 
 ## 字段口径（以 163406 实测校准，2026-09-03）
 

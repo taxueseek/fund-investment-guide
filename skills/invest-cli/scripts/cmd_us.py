@@ -2,14 +2,33 @@
 """
 美股分析 — yfinance 全量快照优先，Bitget rToken 报价兜底。
 输出：估值 + 财务 + 评级（yfinance）；或 rToken/USDT 报价（bitget）。
+
+代码规范化：yfinance 也兜底 A股/港股（见 sources/yfinance.py 的 stock()），
+6 位 A 股代码 → 600519.SS / 000858.SZ；5 位港股代码 → 0700.HK。
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime
 from typing import Any
+
+_CN_SH = re.compile(r"^60[0135]\d{3}$|^688\d{3}$|^689\d{3}$")
+_CN_SZ = re.compile(r"^00[013]\d{3}$|^30[01]\d{3}$")
+
+
+def normalize_ticker(symbol: str) -> str:
+    """yfinance 代码规范化：CN A股/港股代码 → 带后缀 ticker；美股原样。"""
+    t = (symbol or "").strip().upper()
+    if re.fullmatch(r"\d{5}", t):
+        return f"{int(t):04d}.HK"  # 00700 → 0700.HK
+    if _CN_SH.match(t):
+        return f"{t}.SS"
+    if _CN_SZ.match(t):
+        return f"{t}.SZ"
+    return t
 
 
 def normalize_dividend_yield(info: dict[str, Any], price: float | None) -> float | None:
@@ -25,14 +44,17 @@ def normalize_dividend_yield(info: dict[str, Any], price: float | None) -> float
     raw = info.get("dividendYield")
     if raw is None:
         return None
-    return raw / 100 if raw > 1 else raw
+    # 1.0 边界：1.x 版本的百分数形式最小合法值为 1.00%（=1.0）；
+    # 0.2.x 小数为 0.5 时表示 0.5%，但 yfinance 0.2.x 的 dividendYield
+    # 实为年股息/价格的小数，>1 不可能（>100% 股息率不存在），故 >=1 安全。
+    return raw / 100 if raw >= 1 else raw
 
 
 def fetch_us_data(symbol: str) -> dict:
-    """使用 yfinance 获取美股全量快照。失败抛异常；未安装也抛 ImportError。"""
+    """使用 yfinance 获取全量快照（美股为主，也兜底 A股/港股。失败抛异常；未安装也抛 ImportError）。"""
     import yfinance as yf
 
-    ticker = yf.Ticker(symbol.upper())
+    ticker = yf.Ticker(normalize_ticker(symbol))
 
     info = ticker.info
 

@@ -76,6 +76,17 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py screen <条件> [--jso
 - 数据源：东方财富选股 API
 - 支持自然语言条件："市盈率低于10的银行股"、"近1年收益>30%的基金"
 
+### watchlist — 本地自选股
+
+```bash
+python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist add <代码> [--name N] [--type fund|stock]
+python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist remove <代码>
+python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist list [--with-quote]
+```
+
+- 本地存储 `~/.cache/invest-cli/watchlist.json`，不依赖任何外部账户登录态
+- 行情预览走 route.fetch（A 股/基金快照链），按 `--type` 选 stock 或 fund
+
 ### datasources — 数据源探测（统一门闩）
 
 ```bash
@@ -102,15 +113,41 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py wind <server_type> <to
 python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py yingmi <tool> --input '<json>' [--json]
 ```
 
-- 透传 `yingmi-skill-cli mcp call` 工具（基金/策略/财富/资讯）
+- 透传 `yingmi-skill-cli mcp call` 工具（基金/策略/财富/资讯，共 69 个）
 - 前置：`yingmi-skill-cli init` 完成
+- 已收敛高层入口（优先走，勿重复透传）：GuessFundCode/GetFundDiagnosis/SearchFunds/DiagnoseFundPortfolio/GetAssetAllocationPlan
+- 批量/列表类工具（GetPopularFund/Batch*）返回 JSON 数组，适配器已支持（2026-09-03 修复）
+
+### ttskill — 天天基金官方业务包（透传，37 包可达）
+
+```bash
+python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py ttskill <skill_id> --input '<json>' [--json]
+```
+
+- 透传官方 ttskill 业务包（2026-09-03 新增，此前 37 包仅 4 个"声明可达"）
+- 常用：`MANAGER_INFO`（经理画像/在管）、`NAV_INFO`（历史净值）、`STOCK_PRICE_QUERY`（实时行情）、`MACRO_DATA`（中美宏观）、`VALUATION_MAP`（指数/行业估值分位）、`INDEX_FUND_SELECTION`、`CONDITION_SELECT`
+- 参数以官方包 `examples/*.example.json` 为准；返回为原始结构（各包层级不一，透传不解释）
+- fund 深取层内嵌 SEARCH/BASE_INFOS/HOLDING_INFO（走 `fund <code>`，勿手动透传）；黄金走 `intent deep commodity`
+- 账户/交易类包（ACCOUNT_*/TRADE_QUERY/CONDITION_ORDER/SIM_TRADE/RATION_PLAN/SUBACCOUNT）为边界外：invest-cli 数据链路不消费，不建高层入口
+- 全套 37 包用途与收敛标注：`invest-cli capabilities ttskill`
+
+### capabilities — 能力发现层
+
+```bash
+python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py capabilities [yingmi|ttskill] [--json]
+```
+
+- 取数前先查：官方（盈米 69 工具 / 天天 37 包）有什么、invest-cli 收敛到哪、怎么调——一处可见，根治"不知道有 X 能力"的重复低效
+- 空参=数据源总览 + 高层入口速查；`--json` 给 skill 层做路由决策
+- 只列清单不取业务数据；拿不准参数先看 `capabilities` 输出里的工具描述
 
 ### 天天基金官方（ttskill，fund 源，已封装）
 
 老 ttfund CLI 已退役（2026-09-03）：能力被官方 ttskill 业务包取代。
 - fund 默认链为**自带源优先** `hithink > [ttskill 可选深取] > eastmoney`；ttskill 仅在已登录就绪时补充同类分位/机构占比/经理在管等深取字段
 - 黄金深取走 `intent deep commodity` → 官方 `TTFUND_GOLD_INFO`
-- Agent 不要直接调 ttskill 的 37 个业务包；口径真源 = `references/data-pipeline.md`（invest-fund）+ `sources/ttskill.py`
+- 分析 skill 不要绕过 invest-cli 直接调官方包：fund 深取走 `fund <code>`，其余包走 `invest-cli ttskill <skill_id>` 透传
+- 口径真源 = `invest-fund/references/data-pipeline.md` + `sources/ttskill.py`；差距与收敛进度见 `docs/capability-gap.md`
 
 ### intent — 意图层（默认取数入口，收敛接口面）
 

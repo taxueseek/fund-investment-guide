@@ -150,10 +150,17 @@ def _base_snapshot(code: str) -> dict[str, Any]:
         for row in ci.get("period_increase") or []:
             if str(row.get("title")) == t and row.get("syl") is not None:
                 d[label] = _num(row["syl"])
+                # 同类分位 = rank/sc（越小越好），data-pipeline.md 口径；只取风险审查最常用的两个周期
+                rank, sc = row.get("rank"), row.get("sc")
+                if label in ("近1年回报", "近3年回报") and rank is not None and sc is not None:
+                    d[label.replace("回报", "同类分位")] = f"{rank}/{sc}"
                 break
     for key, label in RISK_DISPLAY.items():
         if ui.get(key) is not None:
             d[label] = _num(ui[key])
+    if ui.get("JGBL") is not None:
+        # 机构占比%（fund_holder_structure[].JGBL 同源）；非风险指标，单独映射
+        d["机构占比"] = _num(ui["JGBL"])
     y1 = d.get("近1年回报")
     mdd = d.get("最大回撤")
     if y1 is not None and mdd is not None and mdd:

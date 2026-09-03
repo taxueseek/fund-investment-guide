@@ -94,9 +94,11 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 
 def load_api_key() -> Optional[str]:
-    env = os.environ.get(ENV_KEY)
-    if env and env.strip():
-        return env.strip()
+    from .env import read_env
+
+    env = read_env(ENV_KEY)
+    if env:
+        return env
     for path in credential_files():
         try:
             if not path.is_file():

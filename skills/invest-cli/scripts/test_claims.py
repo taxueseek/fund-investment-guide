@@ -30,7 +30,7 @@ LIVE_DOCS = [
     SKILLS_ROOT / "invest-macro" / "SKILL.md",
 ]
 
-INFRA_MODULES = {"__init__", "registry", "route"}
+INFRA_MODULES = {"__init__", "registry", "route", "env"}
 
 
 def test_yaml_adapters_bijection() -> None:
@@ -96,7 +96,7 @@ def test_entry_source_table_covers_all_sources() -> None:
     cn_names = {
         "hithink": "同花顺", "eastmoney": "东方财富", "yfinance": "yfinance",
         "bitget": "Bitget", "wind": "Wind", "yingmi": "盈米",
-        "ttskill": "ttskill", "argo": "argo",
+        "ttskill": "ttskill", "argo": "argo", "fred": "FRED",
     }
     for sid in load_registry():
         assert sid in text or cn_names.get(sid, sid) in text, f"入口数据源表缺 {sid}"

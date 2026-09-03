@@ -62,7 +62,9 @@ def find_skill_dir(skill_name: str) -> Optional[Path]:
 
 
 def _probe_env(var: str) -> tuple[bool, str]:
-    val = os.environ.get(var)
+    from .env import read_env
+
+    val = read_env(var)
     if val:
         return True, f"{var} 已配置"
     return False, f"缺少环境变量 {var}"
@@ -154,7 +156,9 @@ def detect(conf: dict[str, Any]) -> tuple[bool, str]:
         return _cached(("command", tuple(cmd), check), lambda: _probe_command(cmd, check))
     if dt == "dir":
         d = conf.get("detect") or {}
-        env_dir = os.environ.get(d.get("env_dir", ""))
+        from .env import read_env
+
+        env_dir = read_env(d.get("env_dir", ""))
         if env_dir and Path(env_dir).expanduser().is_dir():
             return True, f"{d.get('env_dir')} 已指向 skill 目录"
         skill = d.get("skill", "")

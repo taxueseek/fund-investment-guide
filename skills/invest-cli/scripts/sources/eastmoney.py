@@ -2,6 +2,8 @@
 
 复用 scripts/ 下现有 cmd_stock / cmd_fund 的取数实现，保持 JSON 契约一致。
 东财=天天（同一家），本适配器只负责东财；天天官方能力走 ttskill 源（sources/ttskill.py）。
+
+key 读取：环境变量 EASTMONEY_APIKEY 或用户级凭据文件（env_or_file，见 data-sources.yaml）。
 """
 from __future__ import annotations
 
@@ -15,9 +17,37 @@ _SCRIPTS = str(Path(__file__).resolve().parent.parent)
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
+ENV_KEY = "EASTMONEY_APIKEY"
 
-# 可用性探测统一走 data-sources.yaml（type: env / EASTMONEY_APIKEY），见 sources/registry.py
-# 注意：不再在此维护模块级 detect()——registry 的 env 探测不会调用它，留着只会产生双实现漂移。
+
+def credential_files() -> list[Path]:
+    cands = [
+        Path.home() / ".config" / "invest-cli" / "eastmoney.env",
+        Path.home() / "Library" / "Application Support" / "invest-cli" / "eastmoney.env",
+    ]
+    return [p for p in cands if p.is_file()]
+
+
+def load_api_key() -> str:
+    """进程环境/launchctl/shell rc 优先（统一识别器），无则读用户级凭据文件。"""
+    from .env import read_env
+
+    val = read_env(ENV_KEY)
+    if val:
+        return val
+    for p in credential_files():
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if line.startswith(f"{ENV_KEY}="):
+                    return line.split("=", 1)[1].strip()
+        except OSError:
+            continue
+    return os.environ.get(ENV_KEY, "")
+
+
+# 可用性探测统一走 data-sources.yaml（type: env_or_file / EASTMONEY_APIKEY），见 sources/registry.py
+# 注意：不再在此维护模块级 detect()——registry 的 env_or_file 探测会调用适配器 detect，
+# 但本模块刻意不提供：KEY 文件按 registry 的 files 列表声明，多实现必漂移。
 
 
 def _wrap(kind: str, snap: Any) -> dict:
@@ -54,10 +84,10 @@ def fund(keyword: str) -> dict:
 def screen(condition: str, page_size: int = 20) -> dict:
     import requests
 
-    api_key = os.getenv("EASTMONEY_APIKEY")
+    api_key = load_api_key()
     if not api_key:
         return {"source": "eastmoney", "kind": "screen", "ok": False, "data": None,
-                "error": "未设置 EASTMONEY_APIKEY"}
+                "error": "未设置 EASTMONEY_APIKEY（env 或 ~/.config/invest-cli/eastmoney.env）"}
     url = "https://mkapi2.dfcfs.com/finskillshub/api/claw/stock-screen"
     try:
         resp = requests.post(

@@ -26,6 +26,12 @@ def test_kind_from_code() -> None:
     assert kind_from_code("510300") == "fund"
     assert kind_from_code("00700") == "stock"
     assert kind_from_code("茅台") is None
+    # 可转债确定性段（盈米实测 2026-09-03：113/123/127/128 段查询全部 400 查无基金）
+    assert kind_from_code("113050") == "bond"
+    assert kind_from_code("113509") == "bond"
+    assert kind_from_code("123111") == "bond"
+    assert kind_from_code("127030") == "bond"
+    assert kind_from_code("128133") == "bond"
 
 
 def test_classify_does_not_call_yingmi_for_shanghai() -> None:
@@ -40,6 +46,7 @@ def test_classify_does_not_call_yingmi_for_shanghai() -> None:
         assert classify("600519") == "stock"
         assert classify("300750") == "stock"
         assert classify("110011") == "fund"
+        assert classify("113050") == "bond"  # 转债段不得打盈米
         assert classify("AAPL") == "us"
         assert classify("易方达蓝筹精选混合") == "fund"
     finally:

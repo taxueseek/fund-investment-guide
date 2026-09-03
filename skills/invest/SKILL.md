@@ -30,7 +30,7 @@ description: |
 | 「黄金」「白银」「原油」「商品」「大宗商品」 | invest-asset（商品细则，黄金叠加十维度） |
 | 「REIT」「REITs」「公募REIT」「分派率」 | invest-asset（REITs 细则） |
 | 「资产配置」「组合」「股债比例」「再平衡」 | invest-allocation |
-| 「大师怎么看」「圆桌」「巴菲特和芒格」「会诊」「多几个角度」 | invest-discuss |
+| 「大师怎么看」「圆桌」「巴菲特和芒格」「会诊」「多几个角度」「上会」「投委会」「重仓前再看看」 | invest-discuss |
 | 「债券」「国债」「利率债」「信用债」「城投」「债市」「利差」「久期」 | invest-asset（债券细则） |
 | 「流动性」「美联储」「缩表」「SOFR」「MOVE」「市场环境」「美股情绪」「NAAIM」「市场过热」「比特币抄底」「MVRV」「钱紧不紧」 | invest-macro |
 | 「出一份IC报告」「电话会」「业绩会」「纪要」「一致预期」「主题策略」「行业深度」「产业链」「市场日报」「晨报」「事件驱动」「投资论点」 | invest-analyst（机构级内容产出） |
@@ -122,10 +122,11 @@ description: |
 | Wind（万得） | 个股/基金/指数/债券/宏观/资讯 | 80 | 否（仅 `invest-cli wind` 透传；无 stock()/fund()） |
 | 盈米且慢 | 基金诊断/策略/财富 | 70 | 否（intent deep fund 的「诊断」问题；无 fund() 快照） |
 | 同花顺金融数据服务 | A 股/公募快照 | 60 | 是（stock A、fund） |
-| 东方财富 | 行情/基金/选股 | 50 | 是（港股、回退、自然语言选股） |
-| yfinance | 美股全量 | 40 | 是（us，未安装则跳过） |
+| 东方财富 | 行情/基金/选股 | 50 | 是（港股、回退、自然语言选股）；key 配 `~/.config/invest-cli/eastmoney.env`（技能市场申请） |
+| yfinance | 美股 + A股/港股兜底 | 40 | 是（us；stock 链末位兜底，未安装则跳过） |
 | Bitget rToken | 美股代币价 | 35 | 是（us 回退） |
 | 天天基金（官方 ttskill） | fund 深取（同类分位/机构占比/在管） | 55 | 是（fund，登录就绪时排 hithink 之后）；黄金走 intent deep commodity→TTFUND_GOLD_INFO |
+| FRED 宏观时序 | 净流动性三序列（总资产/TGA/ON RRP）+ SOFR | 25 | 否（`intent macro` 优先，无 key 降级 argo） |
 | argo | 资讯/舆情/宏观检索 | —（不经快照链） | 否（`intent macro`、`invest-cli info` 直调） |
 
 组合规则：同一问题整单回退、不混字段。行情、诊断、选股、资讯是四个不同问题，才用不同源。运行时链看 `invest-cli datasources` 的「默认快照链」。
@@ -149,7 +150,7 @@ description: |
 | 基金诊断雷达 | `intent deep fund <代码>` | 盈米 GetFundDiagnosis；失败再走基金快照链 |
 | 债券 | `intent deep bond <代码或名称>` | wind bond_data（get_bond_market_data） |
 | 黄金/商品 | `intent deep commodity` | 官方 TTFUND_GOLD_INFO |
-| 宏观/市场 | `intent macro` | argo（nbs_stats 等，免配额） |
+| 宏观/市场 | `intent macro` | FRED 净流动性（WALCL/TGA/ON RRP + SOFR）；无 key 或失败降级 argo（nbs_stats 等，免配额） |
 | HTML 报告阅读 | `intent present <html文件>` | 本地提取正文（终端摘要；PDF 导出用浏览器打印） |
 | 组合诊断/配置 | `intent portfolio <持仓json或自然语言>` | 盈米 |
 | 家庭财务规划 | `intent plan <家庭数据json或自然语言>` | 盈米 |
@@ -181,4 +182,4 @@ description: |
 
 ---
 
-*invest v2.2 | 纯路由 + 统一数据层 | 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*
+*invest v2.3 | 纯路由 + 统一数据层 + 消融维护(链对齐/死路由/退役文档清理) | 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*

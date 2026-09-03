@@ -10,10 +10,11 @@ invest-cli — 投资分析 CLI 工具（主入口）
     invest-cli datasources          列出并探测数据源可用性
     invest-cli wind <server_type> <tool> --input '<json>'  透传万得 Wind
     invest-cli yingmi <tool> --input '<json>'              透传盈米且慢
+    invest-cli ttskill <skill_id> --input '<json>'         透传天天基金官方业务包
+    invest-cli capabilities [yingmi|ttskill]               能力清单+收敛标注（发现层）
 
 选项:
     --json      输出结构化 JSON（给 skill 层用）
-    --refresh   跳过缓存
 
 示例:
     invest-cli stock 600519
@@ -24,6 +25,8 @@ invest-cli — 投资分析 CLI 工具（主入口）
     invest-cli datasources
     invest-cli wind stock_data get_stock_price_indicators --input '{"windcode":"600519.SH"}'
     invest-cli yingmi GetCurrentTime
+    invest-cli ttskill MANAGER_INFO --input '{"manager_name":"谢治宇"}'
+    invest-cli capabilities ttskill
 """
 
 import sys
@@ -157,6 +160,16 @@ def cmd_yingmi(args):
     sys.exit(run(args.tool_name, args.input, as_json=args.json))
 
 
+def cmd_ttskill(args):
+    from cmd_ttskill import run
+    sys.exit(run(args.skill_id, args.input, as_json=args.json))
+
+
+def cmd_capabilities(args):
+    from cmd_capabilities import run
+    sys.exit(run(args.source, as_json=args.json))
+
+
 def cmd_intent(args):
     from cmd_intent import run
     value = list(args.value)
@@ -224,6 +237,17 @@ def main():
     p_ym.add_argument("--input", default="{}", help="参数 JSON")
     p_ym.add_argument("--json", action="store_true")
 
+    # ttskill（天天基金官方透传，37 包可达）
+    p_tt = subparsers.add_parser("ttskill", help="透传天天基金官方业务包（如 MANAGER_INFO/NAV_INFO/STOCK_PRICE_QUERY）")
+    p_tt.add_argument("skill_id", help="业务包 ID，如 TTFUND_MANAGER_INFO")
+    p_tt.add_argument("--input", default="{}", help="参数 JSON")
+    p_tt.add_argument("--json", action="store_true")
+
+    # capabilities（能力发现层）
+    p_cap = subparsers.add_parser("capabilities", help="列出外部数据源能力清单与收敛状态（yingmi/ttskill/空=总览）")
+    p_cap.add_argument("source", nargs="?", default="", help="yingmi / ttskill / 空=总览")
+    p_cap.add_argument("--json", action="store_true")
+
     # intent（意图层，收敛接口面）
     p_int = subparsers.add_parser("intent", help="按意图取数（deep/screen/portfolio/plan/macro/present）")
     p_int.add_argument("scene", help="语义场景：deep/screen/portfolio/plan/macro/present")
@@ -259,6 +283,8 @@ def main():
         "datasources": cmd_datasources,
         "wind": cmd_wind,
         "yingmi": cmd_yingmi,
+        "ttskill": cmd_ttskill,
+        "capabilities": cmd_capabilities,
         "intent": cmd_intent,
         "info": cmd_info,
         "watchlist": cmd_watchlist,

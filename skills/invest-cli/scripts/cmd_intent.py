@@ -51,6 +51,11 @@ _SCENE_TOOLS: dict[str, str] = {
 _SH_A = re.compile(r"^(60[0135]|688|689)\d{3}$")
 _CHINEXT = re.compile(r"^30[01]\d{3}$")
 _FUND_6 = re.compile(r"^[15]\d{5}$")
+# 可转债确定性段（盈米 GuessFundCode 实测 2026-09-03：这些段查询全部 400 查无基金）：
+# 113（沪市转债 2012+）、123/127/128（深市转债）。
+# 110/118 段与场外基金号段冲突（110011=易方达优质精选、118001=易方达亚洲精选，
+# 盈米实测命中），保留给 _is_fund_by_yingmi 消歧，不在确定性段。
+_BOND_6 = re.compile(r"^(113|123|127|128)\d{3}$")
 
 
 def kind_from_code(t: str) -> str | None:
@@ -61,6 +66,8 @@ def kind_from_code(t: str) -> str | None:
         return None
     if _SH_A.match(t) or _CHINEXT.match(t):
         return "stock"
+    if _BOND_6.match(t):
+        return "bond"
     if _FUND_6.match(t):
         return "fund"
     return None
@@ -143,6 +150,8 @@ def _dispatch(scene: str, value: str) -> dict:
             typ = classify(target)
         else:
             typ, target = parts[0], parts[1].strip()
+            # 显式类型词归一：gold → commodity（与 classify 的 _EN_TYPE 同源，避免「gold 支持不了」）
+            typ = _EN_TYPE.get(typ.lower(), typ)
         key = "stock_a_hk" if typ == "stock" else typ
         if typ == "us":
             key = "us"
@@ -160,9 +169,8 @@ def _dispatch(scene: str, value: str) -> dict:
         return {"scene": scene, "route": ROUTES[scene]["default"](value)}
     if scene == "macro":
         q = value or "中国 宏观经济 数据 指标"
-        return {"scene": "macro", "route": ("argo", "nbs_stats", q)}
+        return {"scene": "macro", "route": ("macro_pipeline", q, None)}
     return {"error": f"未知场景 {scene}"}
-
 
 def _stock_with_fallback(target: str) -> dict:
     """deep stock：快照链走 route（A 股同花顺→东财，港股东财）。"""
@@ -216,9 +224,6 @@ def run(scene: str, value: str, as_json: bool = False) -> int:
             except json.JSONDecodeError:
                 pass
         res = yingmi_src.call(tool_name, params=params if isinstance(params, dict) else {})
-    elif kind == "wind":
-        server_type, tool_name, params = (route[1], route[2], route[3] if len(route) > 3 else {})
-        res = wind_src.call(server_type, tool_name, params=params)
     elif kind == "stock_deep":
         res = _stock_with_fallback(route[1])
     elif kind == "fund_deep":
@@ -246,6 +251,14 @@ def run(scene: str, value: str, as_json: bool = False) -> int:
         res = tts_scene(route[1], route[2] or {})
     elif kind == "argo":
         res = argo_src.search(route[2], engine=route[1])
+    elif kind == "macro_pipeline":
+        # 宏观流动性：FRED 净流动性结构化通道优先（WALCL/TGA/ON RRP + SOFR），
+        # 无 key 或失败时降级为 argo 检索兜底，不阻塞宏观查询。
+        from sources import fred as fred_src
+
+        res = fred_src.liquidity()
+        if not res.get("ok") or not (res.get("data") or {}).get("net_liquidity"):
+            res = argo_src.search(route[1], engine="nbs_stats")
     else:
         res = {"source": "unknown", "ok": False, "data": None, "error": f"未知路由 {kind}"}
 

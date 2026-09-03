@@ -34,7 +34,7 @@
 | 基本面分析 | invest-stock | 所有档位都调用（获取三关审查结论 + 5年核心数据） |
 | 估值/同行比较 | invest-stock（机构深度模式） | Deep 和 Formal 档位 |
 | 行业背景 | taxue-industry（L1 概览） | Deep 和 Formal 档位，当需要理解行业格局时 |
-| 一致预期/市场观点 | eastmoney | Formal 档位必做，Deep 档位按需 |
+| 一致预期/市场观点 | invest-cli（`invest-cli info` / `intent`） | Formal 档位必做，Deep 档位按需 |
 | 多视角交叉验证 | invest-discuss | 用户明确要求或标的存在高度分歧时 |
 
 **如果 invest-stock 不可用** → 说明限制，可以基于搜索做简化版分析，但必须标注「未走完整三关审查，分析深度受限」。
@@ -45,7 +45,7 @@
 
 ### Step 0：快速画像（30 秒）
 
-用 web_search + eastmoney 获取：
+用 web_search + invest-cli（`info`/`intent`）获取：
 - 公司全名 + 代码 + 上市地
 - 主营业务一句话 + 行业归属
 - 当前市值 + PE_TTM
@@ -225,7 +225,7 @@
 | ROE | | | | | | __ |
 | 经营现金流/净利润 | | | | | | __ |
 
-### 2.3 市场一致预期（如需，基于 eastmoney）
+### 2.3 市场一致预期（如需，基于 invest-cli 一致预期数据）
 - 机构一致预期 EPS（未来 2 年）：__
 - 目标价区间（券商）__/__
 - 评级分布：买入__/增持__/中性__/减持__
@@ -345,4 +345,4 @@
 
 ---
 
-*IC 研报参考 v2.0 · 三档位 · 灵魂三问自检 · 依赖 invest-stock + taxue-industry + eastmoney*
+*IC 研报参考 v2.0 · 三档位 · 灵魂三问自检 · 依赖 invest-stock + taxue-industry + invest-cli*

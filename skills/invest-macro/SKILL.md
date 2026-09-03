@@ -49,6 +49,7 @@ description: |
 | 散户净买入额 | 散户狂热往往是顶部信号 |
 | 标普500 远期市盈率 | >20 偏高，<15 偏低 |
 | 对冲基金杠杆率 | 高杠杆增加系统性风险 |
+| 恐惧贪婪指数 | >80 极端贪婪（顶区），<20 极端恐慌（反向机会） |
 
 **综合输出**：情绪评级（贪婪 / 正常 / 恐慌）＋ 仓位建议（减仓 / 持有 / 加仓）。
 
@@ -92,14 +93,18 @@ description: |
 
 ## 数据获取（invest-cli）
 
-直接 `intent macro`（argo 宏观引擎池，免配额）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+`intent macro` 优先走 FRED 净流动性结构化通道，无 key 或取数失败自动降级 argo 检索：
 
 ```bash
-# 宏观（argo nbs_stats 等引擎池）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py intent macro
+# 宏观流动性（FRED：净流动性 = 总资产 − TGA − ON RRP + SOFR；需 FRED_API_KEY，免费注册）
+# 无 key 时自动降级 argo nbs_stats；PATH 无 invest-cli 时兜底 python3 "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py"
+invest-cli intent macro
+# 宏观检索兜底/背景（argo nbs_stats 等引擎池）
 # 流动性/宏观经济（Wind economic_data）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind economic_data query_economic_indicator_data --input '{"indicatorCode":""}'
+invest-cli wind economic_data query_economic_indicator_data --input '{"indicatorCode":""}'
 ```
+
+FRED key 配置（免注册费）：环境变量 `FRED_API_KEY` 或 `~/.config/invest-cli/fred.env` 写入 `FRED_API_KEY=xxx`。
 
 ---
 

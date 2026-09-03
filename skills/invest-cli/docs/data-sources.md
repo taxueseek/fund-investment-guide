@@ -161,7 +161,7 @@ invest-cli 只暴露两处入口，Agent 不直接管理 37 个业务包：
 - `invest-cli fund <代码/名称>`：三关快照（SEARCH/BASE_INFOS/HOLDING_INFO；链位 55，登录就绪才参与，主路仍是自带 hithink）
 - `invest-cli intent deep commodity ...`：黄金 → 官方 `TTFUND_GOLD_INFO`
 
-字段口径真源：invest-fund `references/data-pipeline.md` + `sources/ttskill.py`。
+字段口径真源：invest-fund `invest-fund/references/data-pipeline.md` + `sources/ttskill.py`。
 
 ---
 
