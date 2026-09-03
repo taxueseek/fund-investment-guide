@@ -1,9 +1,9 @@
 ---
 name: invest-fund
 description: |
-  invest系列：基金分析。判断单一基金产品是否值得买入或持有：了解策略吗？能持续跑赢吗？成本合理吗？覆盖主动基金、ETF、指数基金、QDII。
+  invest系列：基金分析。判断单一基金产品是否值得买入或持有：了解策略吗？能持续跑赢吗？成本合理吗？覆盖主动基金、ETF、指数基金、QDII。分析交付物含基金体检报告与同经理多基金对比报告，数据走官方 ttskill 管线。
 
-  触发：「分析这只基金」「ETF怎么样」「基金值得持有吗」「基金经理靠谱吗」「选哪只基金」
+  触发：「分析这只基金」「基金体检」「基金诊断」「基金分析报告」「这只基金怎么样」「同经理几只基金选哪个」「基金经理哪只产品好」「基金怎么选」「基金筛选」「ETF怎么样」「基金值得持有吗」「基金经理靠谱吗」「选哪只基金」
 ---
 
 # invest-fund：基金分析
@@ -21,6 +21,7 @@ description: |
 | "刚成立" "新发" "不到一年" "次新" | C：次新基金 | `references/scene-c.md` |
 | "ETF" "指数基金" "联接" "跟踪误差" | E：ETF分析 | `references/scene-e.md` |
 | 单一行业/主题（新能源、医药、白酒等） | G：行业主题 | `references/scene-g.md` |
+| "体检" "诊断" "分析报告" "怎么样"（单基金） | A：标准体检 | `references/scene-a.md` |
 | （其他，默认） | A：标准体检 | `references/scene-a.md` |
 
 **场景优先级**：B(同经理) > F(跨基金对比) > G(行业) > C(次新) > E(ETF) > A(默认)
@@ -228,6 +229,7 @@ description: |
 
 **分析日期**：{{T}}
 **数据基准**：{{N}}年 {{report_type}}（新鲜度：{{freshness}}%）
+**数据截至**：{{净值日期/持仓报告期}} · 来源：{{数据源}}
 **基金类型**：主动股票/ETF/指数基金/债券/混合/QDII
 
 ---
@@ -267,6 +269,7 @@ description: |
 | 夏普比率 | __ | >1 | __ |
 | 卡玛比率 | __ | >2 | __ |
 | 信息比率 | __ | >0.5 | __ |
+| 同类分位 | __%（rank/sc） | 前25%优；绝对值达标但同类后50%=行情红利 | __ |
 
 ---
 
@@ -302,6 +305,7 @@ description: |
 | 任职时间 | ______年 |
 | 管理本基金规模 | ______亿 |
 | 历史管理业绩 | ______ |
+| 机构占比 | ____%（截至____） |
 | 近1年是否更换 | 是/否 |
 
 ### 经理方法论深度分析（主动基金必做）
@@ -370,8 +374,8 @@ description: |
 |------|------|
 | 「分析这只基金」 | invest-fund |
 | 「分析这只股票」 | invest-stock |
-| 「解读基金季报」 | invest-report |
-| 「基金经理筛选」 | invest-fund-manager |
+| 「组合里基金配多少」 | invest-allocation |
+| 「让大师看看这只基金」 | invest-discuss |
 
 ---
 
@@ -395,6 +399,7 @@ description: |
 | E：ETF分析 | `references/scene-e.md` | 中 |
 | A：单只基金深度分析 | `references/scene-a.md` | 默认 |
 | 文档处理协作 | `references/doc-processing.md` | 按需 |
+| 数据管线与口径 | `references/data-pipeline.md` | 取数前/字段疑问时 |
 | 基金经理共性框架 | `../invest-stock/references/manager-patterns.md` | 按需 |
 
 *invest-fund v2.0 | 场景路由优先 · 核心方法论 · 持有检查 · 场景优先级*
@@ -405,6 +410,7 @@ description: |
 
 取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
-1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
-2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
-3. 标注数据来源，口径不一致不合并
+1. 直接 `invest-cli fund <代码/名称>` 取三关快照（route 内部选源）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+2. 源优先级：**hithink 同花顺（自带主路，费用明细全）→ ttskill（官方可选深取引擎：风险族/同类分位/经理解析最全；已登录就绪才参与）→ eastmoney 东财**。首个成功即用，整单回退不混字段；ttskill 未登录/未装时探测不过自动跳过，不影响自带主路。
+3. 字段口径、判定阈值、错误处理见 `references/data-pipeline.md`——首次做基金分析或遇到字段疑问时必读。
+4. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，诊断雷达用 `intent deep fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`）。名称搜不到时回退东财。标注数据来源，口径不一致不合并。

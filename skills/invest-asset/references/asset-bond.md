@@ -1,14 +1,7 @@
----
-name: invest-bond
-description: |
-  invest系列：债券分析。判断利率债、信用债是否值得配置：偿付可靠吗？超额收益好吗？收益率/利差贵吗？
-
-  触发：「债券」「国债」「利率债」「信用债」「城投」「金融债」「债市」「收益率」「久期」「信用利差」「票面利率」
----
-
-# invest-bond：债券分析
+# 债券资产细则（bond）
 
 > 债券是借贷凭证，核心是偿付能力，不是价格博弈。买债券先问：能还本付息吗？
+> 本文件由 invest-asset 在识别到「债券/利率债/信用债」时加载，是债券资产的专属三关细则。
 
 ---
 
@@ -18,7 +11,7 @@ description: |
 |------|------|---------|
 | 利率债（国债/政金/地方） | 信用风险极低 | 利率风险（久期）、再投资 |
 | 信用债（企业/城投/金融） | 有违约风险 | 偿债能力、信用利差 |
-| 可转债 | 股债双性 | 见 invest-convertible，不在此重复 |
+| 可转债 | 股债双性 | 见 `asset-convertible.md`（本技能内，不在此重复） |
 
 ---
 
@@ -79,22 +72,20 @@ description: |
 
 ## 数据获取（invest-cli）
 
-取数前先探测：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources`
+取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
 ```bash
-# 债市（ttfund，需 ttfund login）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py ttfund bond
-# 债券数据（Wind bond_data）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind bond_data <tool> --input '<json>'
+# 债券（intent deep bond → wind bond_data）
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py intent deep bond <代码或名称>
 ```
 
 ---
 
 ## 与系列技能分工
 
-- 「打新债/可转债」→ invest-convertible
+- 「打新债/可转债」→ invest-asset（`asset-convertible.md`）
 - 「债券基金」→ invest-fund
-- 「买国债/信用债」→ invest-bond
+- 「买国债/信用债」→ invest-asset（本文件）
 
 ---
 
@@ -107,4 +98,4 @@ python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind bond_data <tool> -
 
 ---
 
-*invest-bond v1.0 | 偿付 + 利差 + 位置三关*
+*asset-bond v1.0 | 偿付 + 利差 + 位置三关 | 2026-09-03 自 invest-bond 迁入*

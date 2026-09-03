@@ -4,11 +4,12 @@ CLI 与分析 skill 只通过本模块判断某数据源是否可用，不自行
 """
 from __future__ import annotations
 
-import os
-import sys
-import shutil
+import importlib
 import importlib.util
+import os
+import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,6 +17,10 @@ from . import load_registry
 
 # 可配置的数据源探测超时（防止探测某个 CLI 时卡死）
 DETECT_TIMEOUT = 10
+ENV_KEY_FALLBACK = "HITHINK_FINANCE_API_KEY"
+# command/dir 探测贵（子进程），同进程 30s 内复用；env/python 本身很便宜不缓存。
+_PROBE_TTL = 30.0
+_PROBE_CACHE: dict[tuple[Any, ...], tuple[float, bool, str]] = {}
 
 
 def skill_roots() -> list[Path]:
@@ -105,22 +110,56 @@ def _probe_dir(skill: str, key_hint: list[str]) -> tuple[bool, str]:
     return False, f"找到 {skill} 目录，但未找到 key 文件（{key_hint}）"
 
 
+def _cached(key: tuple[Any, ...], fn) -> tuple[bool, str]:
+    now = time.monotonic()
+    hit = _PROBE_CACHE.get(key)
+    if hit and now - hit[0] < _PROBE_TTL:
+        return hit[1], hit[2]
+    ok, detail = fn()
+    _PROBE_CACHE[key] = (now, ok, detail)
+    return ok, detail
+
+
 def detect(conf: dict[str, Any]) -> tuple[bool, str]:
     """按 conf['detect'] 探测单个数据源，返回 (available, detail)。"""
     dt = (conf.get("detect") or {}).get("type")
     if dt == "env":
         return _probe_env(conf.get("env_var", ""))
+    if dt == "env_or_file":
+        names = conf.get("adapters") or []
+        if names:
+            try:
+                mod = importlib.import_module(f"sources.{names[0]}")
+                fn = getattr(mod, "detect", None)
+                if callable(fn):
+                    # 适配器级探测多为子进程（ttskill status 等），与 command/dir 同享 TTL 缓存
+                    return _cached(("adapter", names[0]), fn)
+            except Exception:
+                pass
+        ok, detail = _probe_env(conf.get("env_var", ""))
+        if ok:
+            return ok, detail
+        files = (conf.get("detect") or {}).get("files") or []
+        var = conf.get("env_var") or ENV_KEY_FALLBACK
+        for raw in files:
+            if Path(raw).expanduser().is_file():
+                return True, "读到 credentials.env"
+        return False, f"缺少环境变量 {var} 且无凭据文件"
     if dt == "python":
         return _probe_python((conf.get("detect") or {}).get("module", ""))
     if dt == "command":
         d = conf.get("detect") or {}
-        return _probe_command(d.get("cmd", []), d.get("check", ""))
+        cmd = d.get("cmd", [])
+        check = d.get("check", "")
+        return _cached(("command", tuple(cmd), check), lambda: _probe_command(cmd, check))
     if dt == "dir":
         d = conf.get("detect") or {}
         env_dir = os.environ.get(d.get("env_dir", ""))
         if env_dir and Path(env_dir).expanduser().is_dir():
             return True, f"{d.get('env_dir')} 已指向 skill 目录"
-        return _probe_dir(d.get("skill", ""), d.get("key_hint", []))
+        skill = d.get("skill", "")
+        hints = tuple(d.get("key_hint") or [])
+        return _cached(("dir", skill, hints), lambda: _probe_dir(skill, list(hints)))
     if dt == "always":
         return True, "始终可用（免费无 key）"
     return False, f"未知探测方式 {dt!r}"

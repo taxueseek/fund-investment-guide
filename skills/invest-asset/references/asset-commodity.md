@@ -1,14 +1,7 @@
----
-name: invest-commodity
-description: |
-  invest系列：大宗商品分析。判断黄金、白银、原油等商品是否值得配置：逻辑清晰吗？位置合理吗？能承受波动吗？
-
-  触发：「分析黄金」「白银怎么样」「原油值得买吗」「大宗商品配置」
----
-
-# invest-commodity：大宗商品分析
+# 大宗商品资产细则（commodity）
 
 > 商品没有现金流，只有价格波动。买商品是买逻辑，不是买资产。
+> 本文件由 invest-asset 在识别到「黄金/白银/原油/商品/大宗」时加载。黄金分析叠加十维度评分（见 `commodity-gold.md`）。
 
 ---
 
@@ -209,7 +202,7 @@ description: |
 
 ---
 
-*invest-commodity v1.0 | 三关审查*
+*本分析基于公开信息，不构成投资建议。*
 ```
 
 ---
@@ -218,7 +211,7 @@ description: |
 
 | 场景 | 路由 |
 |------|------|
-| 「分析黄金/白银/原油」 | invest-commodity |
+| 「分析黄金/白银/原油」 | invest-asset（本文件；黄金叠加 `commodity-gold.md` 十维度） |
 | 「分析黄金股」 | invest-stock（分析公司，非商品本身） |
 | 「商品基金」 | invest-fund |
 
@@ -235,8 +228,8 @@ description: |
 
 ## 黄金增强：十维度评分
 
-分析黄金时，在三关审查外叠加十维度量化评分并输出信号（见 `references/commodity-gold.md`）。数据由 invest-cli 提供（`ttfund gold` 或 Wind），注意时效字段（is_stale/is_backfilled）。
+分析黄金时，在三关审查外叠加十维度量化评分并输出信号（见 `commodity-gold.md`）。数据由 invest-cli 提供（`intent deep commodity` → 官方 TTFUND_GOLD_INFO 或 Wind），注意时效字段（is_stale/is_backfilled）。
 
 ---
 
-*invest-commodity v1.1 | 三关审查 + 黄金十维度*
+*asset-commodity v1.0 | 三关审查 + 黄金十维度 | 2026-09-03 自 invest-commodity 迁入*

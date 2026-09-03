@@ -16,8 +16,7 @@ EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 def get_api_key():
     key = os.getenv("EASTMONEY_APIKEY")
     if not key:
-        print("错误: 未设置 EASTMONEY_APIKEY 环境变量", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
     return key
 
 
@@ -58,8 +57,10 @@ def parse_tables(raw: dict) -> list[dict]:
 
 
 def resolve_fund_code(keyword: str) -> str:
+    # ⚠ 易方达蓝筹(精选) = 005827；110011 现为「易方达优质精选(QDII)」。
+    # 旧映射把蓝筹指到 110011，在东财兜底路径会返回错误标的（仅 ttsskill/hithink 全挂时触发）。
     known = {
-        "易方达蓝筹": "110011", "易方达蓝筹精选": "110011",
+        "易方达蓝筹": "005827", "易方达蓝筹精选": "005827",
         "中欧医疗": "003096", "中欧医疗健康": "003096",
         "招商中证白酒": "161725",
         "富国天惠": "161005",
@@ -69,6 +70,13 @@ def resolve_fund_code(keyword: str) -> str:
     if keyword.isdigit() and len(keyword) == 6:
         return keyword
     return known.get(keyword, keyword)
+
+
+def fetch_fund_with_fallback(keyword: str) -> dict:
+    """公募基金快照：route.pick 选源，整单回退。盈米诊断不在这条链（无 fund()）。"""
+    from sources.route import fetch, unwrap_snapshot
+
+    return unwrap_snapshot(fetch("fund", keyword))
 
 
 def fetch_fund_data(code: str) -> dict:
@@ -122,17 +130,21 @@ def format_terminal(data: dict) -> str:
     lines = []
     d = data.get("data", {})
     h = data.get("holdings", [])
-    name = data.get("name", data["code"])
+    name = data.get("name") or data.get("code") or "未知基金"
 
     lines.append(f"\n{'=' * 60}")
-    lines.append(f"  {name}（{data['code']}）— 基金快照")
+    lines.append(f"  {name}（{data.get('code', '-')}）— 基金快照")
     lines.append(f"{'=' * 60}")
 
     # 基础
     lines.append(f"\n  {'基础信息':<14} {'数值':>16}")
     lines.append(f"  {'-' * 32}")
     for api_key, label in [("基金类型", "类型"), ("成立日期", "成立日期"), ("基金规模", "规模"), ("基金管理人", "管理人")]:
-        val = d.get(api_key, "-")
+        val = d.get(api_key)
+        if val is None or val == "":
+            val = "-"
+        elif label == "规模" and isinstance(val, (int, float)) and val >= 1e8:
+            val = f"{val / 1e8:.2f}亿"
         lines.append(f"  {label:<14} {str(val):>16}")
 
     # 业绩
@@ -146,7 +158,7 @@ def format_terminal(data: dict) -> str:
         lines.append(f"  {'-' * 32}")
         for api_key, label in perf_keys:
             val = d.get(api_key)
-            if val:
+            if val is not None and val != "":
                 lines.append(f"  {label:<14} {str(val):>16}")
 
     # 风险
@@ -157,7 +169,7 @@ def format_terminal(data: dict) -> str:
         lines.append(f"  {'-' * 32}")
         for api_key, label in risk_keys:
             val = d.get(api_key)
-            if val:
+            if val is not None and val != "":
                 lines.append(f"  {label:<14} {str(val):>16}")
 
     # 费率
@@ -187,17 +199,23 @@ def format_terminal(data: dict) -> str:
         lines.append(f"\n  十大重仓股:")
         lines.append(f"  {'-' * 40}")
         for stock in h[:10]:
-            sname = stock.get("entityName", "")
-            # 尝试从 nameMap 或 table 取占比
-            ratio = ""
-            for k, v in stock.items():
-                if k != "entityName" and v:
-                    ratio = str(v)
-                    break
-            lines.append(f"  {sname:<20} {ratio:>10}")
+            sname = stock.get("stock_name") or stock.get("entityName") or ""
+            ratio = stock.get("hold_ratio")
+            if ratio is None:
+                ratio = stock.get("占净值比例", "")
+                if not ratio:
+                    for k, v in stock.items():
+                        if k not in ("entityName", "stock_name", "ticker", "thscode", "investment_rank") and v not in (None, ""):
+                            ratio = v
+                            break
+            lines.append(f"  {sname:<20} {str(ratio):>10}")
 
-    lines.append(f"\n  数据时间: {data['timestamp']}")
-    lines.append(f"  数据来源: 东方财富")
+    src = data.get("source_label") or data.get("source") or "东方财富"
+    lines.append(f"\n  数据时间: {data.get('timestamp', '-')}")
+    lines.append(f"  数据来源: {src}")
+    warns = data.get("warnings") or []
+    if warns:
+        lines.append(f"  警告: {'; '.join(warns)}")
     return "\n".join(lines)
 
 
@@ -208,9 +226,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = parser.parse_args()
 
-    code = resolve_fund_code(args.keyword)
     try:
-        data = fetch_fund_data(code)
+        data = fetch_fund_with_fallback(args.keyword)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)

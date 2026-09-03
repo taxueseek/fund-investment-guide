@@ -1,6 +1,8 @@
 # data-sources.yaml — invest-cli 数据源配置真源
 #
 # 工程纪律（参考 argo config.yaml）：
+#   0. 自带源(hithink/eastmoney/yfinance/bitget)主路；ttskill/wind/yingmi 为外部可选引擎，
+#      仅在已安装且就绪时按优先级补充（登录+签名在官方 runtime，invest 不复刻）。
 #   1. 数据源声明只在本文件维护；scripts/sources/*.py 只读取本文件，不重复定义硬编码数据源。
 #   2. 新增/修改数据源只改本文件 + 必要时新增 scripts/sources/<id>.py 适配器。
 #   3. 探测可用性统一走 scripts/sources/registry.py 的 detect_all()，CLI 不会自行判断。
@@ -10,15 +12,29 @@
 #   coverage  覆盖的标的/场景（语义标签，供能力矩阵与路由参考）
 #   priority  优先级（数字越大越优先，用于路由与降级排序）
 #   detect    可用性探测方式:
-#               type=env      检查环境变量
-#               type=python   检查可导入模块
-#               type=command  执行命令并匹配 check 子串（false 匹配表示不可用）
-#               type=dir      查找指定 skill 目录 + 可选 key 文件
+#               type=env          检查环境变量
+#               type=env_or_file  环境变量，否则用户级凭据文件（不打印 Key）
+#               type=python       检查可导入模块
+#               type=command      执行命令并匹配 check 子串（false 匹配表示不可用）
+#               type=dir          查找指定 skill 目录 + 可选 key 文件
 #   adapters  对应 scripts/sources/ 下的适配器模块名
 
 version: 1
 
 sources:
+  hithink:
+    name: 同花顺金融数据服务
+    kind: api
+    coverage: [stock, fund]
+    priority: 60
+    env_var: HITHINK_FINANCE_API_KEY
+    detect:
+      type: env_or_file
+      files:
+        - ~/Library/Application Support/hithink-finance/credentials.env
+        - ~/.config/hithink-finance/credentials.env
+    adapters: [hithink]
+
   eastmoney:
     name: 东方财富
     kind: api
@@ -39,6 +55,15 @@ sources:
       type: python
       module: yfinance
     adapters: [yfinance]
+
+  bitget:
+    name: Bitget rToken
+    kind: api
+    coverage: [us]
+    priority: 35
+    detect:
+      type: always
+    adapters: [bitget]
 
   wind:
     name: 万得 Wind
@@ -64,13 +89,23 @@ sources:
       check: '"hasApiKey": true'
     adapters: [yingmi]
 
-  ttfund:
-    name: 天天基金
+  ttskill:
+    name: 天天基金(官方) ttskill（可选深取引擎）
     kind: cli
-    coverage: [fund, bond, gold, macro, strategy, allocate, research]
-    priority: 30
+    coverage: [fund]
+    priority: 55
     detect:
-      type: command
-      cmd: [ttfund, status]
-      check: ""
-    adapters: [ttfund]
+      type: env_or_file
+      env_var: TTSKILL_STATUS
+      files: []
+    adapters: [ttskill]
+
+  argo:
+    name: argo 财经检索（资讯/舆情/宏观引擎池）
+    kind: cli
+    coverage: [news, macro]
+    priority: 20
+    detect:
+      type: env_or_file
+      files: []
+    adapters: [argo]

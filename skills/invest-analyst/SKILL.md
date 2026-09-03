@@ -172,11 +172,9 @@ description: |
 invest（入口路由）
 ├── invest-stock        ← 个股「买不买」判断
 ├── invest-fund         ← 基金「买不买」判断  
+├── invest-asset        ← 债券/可转债/商品/REITs「配不配」判断
 ├── invest-allocation   ← 资产配置
 ├── invest-discuss      ← 大师会诊
-├── invest-commodity    ← 商品
-├── invest-convertible  ← 可转债
-├── invest-reit         ← REITs
 └── invest-analyst      ← 你在这里：把这些判断变成「可交付内容」
 ```
 

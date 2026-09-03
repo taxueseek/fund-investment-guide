@@ -1,7 +1,7 @@
 """watchlist 子命令：本地自选股（自含，不依赖东财账户）。
 
 存储：~/.cache/invest-cli/watchlist.json（本地，无版权问题）
-行情预览：走东财已授权接口（EASTMONEY_APIKEY），不用腾讯非公开接口。
+行情预览：走 route.fetch（A 股/基金快照链），按 --type 选 stock 或 fund。
 
 用法:
     invest-cli watchlist add <code> [--name N] [--type fund|stock]
@@ -53,13 +53,26 @@ def remove(code: str) -> dict:
     return {"source": "watchlist", "ok": True, "data": {"code": code, "removed": True}, "error": None}
 
 
-def _quote(code: str) -> str:
+def _quote(code: str, typ: str = "") -> str:
     try:
-        from sources import eastmoney
-        r = eastmoney.stock(code)
+        from sources.route import fetch
+
+        kind = "fund" if (typ or "").lower() == "fund" else "stock"
+        market = None
+        if kind == "stock":
+            market = "hk" if len((code or "").strip()) == 5 else "a"
+        r = fetch(kind, code, market=market)
         if r.get("ok"):
             d = r.get("data") or {}
-            return f"{d.get('name', code)} {d.get('data', {}).get('最新价', '')}"
+            inner = d.get("data") if isinstance(d.get("data"), dict) else {}
+            last = (
+                (d.get("quote") or {}).get("last")
+                or inner.get("单位净值")
+                or inner.get("最新价")
+                or inner.get("收盘价")
+                or ""
+            )
+            return f"{d.get('name', code)} {last}".strip()
     except Exception:
         pass
     return code
@@ -77,7 +90,7 @@ def run(action: str, code: str = "", name: str = "", typ: str = "",
         for it in items:
             row = {"code": it.get("code"), "name": it.get("name", ""), "type": it.get("type", "")}
             if with_quote:
-                row["quote"] = _quote(it.get("code", ""))
+                row["quote"] = _quote(it.get("code", ""), it.get("type", ""))
             rows.append(row)
         out = {"source": "watchlist", "ok": True, "data": {"items": rows}, "error": None}
     else:

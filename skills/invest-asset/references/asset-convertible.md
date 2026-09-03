@@ -1,14 +1,7 @@
----
-name: invest-convertible
-description: |
-  invest系列：可转债分析。判断单一可转债是否值得买入或持有：债底保护足够吗？转股价值合理吗？溢价率合适吗？
-
-  触发：「分析这只可转债」「转债怎么样」「可转债值得买吗」「转股价值」「溢价率」
----
-
-# invest-convertible：可转债分析
+# 可转债资产细则（convertible）
 
 > 可转债是"下有保底、上不封顶"的品种。但保底有前提，封顶有条件。
+> 本文件由 invest-asset 在识别到「可转债/转债/转股/溢价率」时加载。
 
 ---
 
@@ -225,9 +218,9 @@ description: |
 
 | 场景 | 路由 |
 |------|------|
-| 「分析这只可转债」 | invest-convertible |
+| 「分析这只可转债」 | invest-asset（本文件） |
 | 「分析正股」 | invest-stock |
-| 「转债转股划算吗」 | invest-convertible（评估溢价率） |
+| 「转债转股划算吗」 | invest-asset（本文件：评估溢价率） |
 
 ---
 
@@ -240,7 +233,7 @@ description: |
 
 ---
 
-*invest-convertible v1.0 | 三关审查 | 动态时间算法*
+*asset-convertible v1.0 | 三关审查 | 动态时间算法 | 2026-09-03 自 invest-convertible 迁入*
 
 ---
 
@@ -248,6 +241,6 @@ description: |
 
 取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
-1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
-2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
+1. 直接按场景取数（`invest-cli stock` 看正股，转债条款走权威源）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令
 3. 标注数据来源，口径不一致不合并

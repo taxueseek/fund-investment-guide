@@ -13,12 +13,6 @@ if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
 
-def detect() -> tuple[bool, str]:
-    from .registry import _probe_python
-
-    return _probe_python("yfinance")
-
-
 def us(symbol: str) -> dict:
     try:
         from cmd_us import fetch_us_data

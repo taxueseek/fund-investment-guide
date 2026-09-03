@@ -393,6 +393,6 @@ AH溢价率 = (A股价格 / H股价格 / 汇率 - 1) × 100%
 
 取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
-1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
-2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
-3. 标注数据来源，口径不一致不合并
+1. 直接 `invest-cli stock <代码>` / `us <代码>` 取快照（route 内部选源）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令
+3. A 股 `stock` 在同花顺可用时走官方 REST（含近 5 年年报与加权平均 ROE）；港股仍走东财。标注数据来源，口径不一致不合并

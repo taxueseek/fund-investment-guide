@@ -10,7 +10,7 @@ description: |
 # invest-macro：宏观与市场环境
 
 > 市场环境决定大类资产的方向。先看水位，再看情绪，最后看抄底信号。
-> 数据来源见 invest-cli（ttfund macro / Wind economic_data）或公开检索，时效性强。
+> 数据来源见 invest-cli（intent macro / Wind economic_data）或公开检索，时效性强。
 
 ---
 
@@ -84,7 +84,7 @@ description: |
 关键结论：____
 行动建议：____
 
-数据来源：invest-cli（ttfund macro / Wind economic_data）或公开检索
+数据来源：invest-cli（intent macro / Wind economic_data）或公开检索
 免责声明：基于公开信息的分析框架，不构成投资建议。
 ```
 
@@ -92,11 +92,11 @@ description: |
 
 ## 数据获取（invest-cli）
 
-取数前先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources`
+直接 `intent macro`（argo 宏观引擎池，免配额）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
 
 ```bash
-# 宏观（ttfund，需先 ttfund login）
-python ~/.agents/skills/invest-cli/scripts/invest_cli.py ttfund macro
+# 宏观（argo nbs_stats 等引擎池）
+python ~/.agents/skills/invest-cli/scripts/invest_cli.py intent macro
 # 流动性/宏观经济（Wind economic_data）
 python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind economic_data query_economic_indicator_data --input '{"indicatorCode":""}'
 ```
@@ -105,9 +105,9 @@ python ~/.agents/skills/invest-cli/scripts/invest_cli.py wind economic_data quer
 
 ## 与系列技能分工
 
-- 「分析黄金/白银/原油」→ invest-commodity
+- 「分析黄金/白银/原油/债券/可转债/REITs」→ invest-asset
 - 「市场环境/仓位管理」→ invest-macro
-- 「美股个股」→ invest-us
+- 「美股个股」→ invest-stock
 - 「资产配置再平衡」→ invest-allocation
 
 ---

@@ -1,6 +1,5 @@
 ---
 name: invest-discuss
-aliases: ["invest-discuss"]
 description: |
   大师会诊——4种投资视角×3档深度，多视角审视标的，发现单一视角的盲区。
 

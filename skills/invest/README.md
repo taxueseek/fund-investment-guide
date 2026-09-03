@@ -1,21 +1,25 @@
-# Invest 系列：全面投资分析指南
+# Invest 系列：投资分析技能组
 
-> 覆盖股票、基金、可转债、大宗商品、REITs、资产配置的投资分析系统。
+> 覆盖个股、基金、可转债、商品、REITs、债券、宏观市场、资产配置、大师会诊、机构级研报产出。
 > 大道至简，三关审查：懂不懂？好不好？贵不贵？
 
 ---
 
-## 覆盖范围
+## 技能清单（v2.2）
 
-| 资产类别 | 技能 | 核心问题 |
-|---------|------|---------|
-| **个股** | invest-stock | 懂生意吗？有护城河吗？价格合适吗？ |
-| **基金** | invest-fund | 懂策略吗？能跑赢吗？成本合理吗？ |
-| **可转债** | invest-convertible | 懂条款吗？债底足吗？溢价合理吗？ |
-| **大宗商品** | invest-commodity | 逻辑清晰吗？位置合理吗？能承受波动吗？ |
-| **REITs** | invest-reit | 懂底层资产吗？分派可持续吗？估值合理吗？ |
-| **资产配置** | invest-allocation | 股债商比例合理吗？再平衡了吗？ |
-| **投资圆桌** | zaoren-invest-roundtable | 大师们怎么看？盲区在哪？ |
+| 技能 | 职责 | 入口问法 |
+|------|------|---------|
+| invest | 主入口路由 | 「分析一下茅台」 |
+| invest-stock | 个股（A股/港股/美股） | 「看看茅台这只股票」 |
+| invest-fund | 基金/ETF/经理 | 「张坤的基金怎么样」 |
+| invest-asset | 债券/可转债/商品/REITs（单一品种资产） | 「这只转债值得买吗」「黄金能配吗」「REITs怎么看」「利率债现在怎么看」 |
+| invest-macro | 宏观与市场环境 | 「市场过热了吗」 |
+| invest-allocation | 资产配置 | 「我的配置合理吗」 |
+| invest-discuss | 大师会诊（4视角×3深度） | 「让巴菲特和芒格看看」 |
+| invest-analyst | 机构级内容产出 | 「出一份茅台的IC报告」 |
+| invest-cli | 统一数据层（CLI） | 「用cli查一下茅台」 |
+
+> 2026-09-03：invest-bond / invest-convertible / invest-commodity / invest-reit 四技能合并为 invest-asset（同一三关模板×四种资产参数，资产细则见 `invest-asset/references/asset-*.md`）。原四技能注册链已删除，历史原文在 `~/.claude/skills-archive/2026-09-03_merged-invest-asset/`。
 
 **市场覆盖**：A股、港股、美股、QDII（全球配置）
 
@@ -23,123 +27,36 @@
 
 ## 核心框架：三关审查
 
-所有资产类型统一使用"三关审查"框架：
-
 ```
-第一关：懂不懂（能力圈/策略理解）
-   ↓ 未通过 → 停止分析，不买
-
-第二关：好不好（护城河/业绩持续性）
-   ↓ 未通过 → 停止分析，不买
-
-第三关：贵不贵（安全边际/估值时机）
-   ↓ 未通过 → 等待或换标的
-   ↓ 通过 → 可考虑买入
+第一关：懂不懂（能力圈/策略理解）   未通过 → 停止，不买
+第二关：好不好（护城河/业绩持续性） 未通过 → 停止，不买
+第三关：贵不贵（安全边际/估值时机） 未通过 → 等待；通过 → 可考虑买入
 ```
 
 ---
 
-## 时间定位（动态算法）
+## 数据层（invest-cli，单一数据入口）
 
-无需硬编码年份，自动推导数据基准：
+- 所有取数走 `invest-cli`（`stock/fund/us/screen/intent`），不为单个数据源单独路由
+- 声明真源 `data-sources.yaml`；`invest-cli datasources` 查看本机可用快照链
+- 命令入口 `invest-cli`（PATH）；无命令时兜底 `python3 "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py"`
+- 整单回退、不混字段；输出必须标注数据来源
 
-```
-财年锚点 N = T.year if T > 4/30 else T.year - 1
-分析周期 = [N-4, N-3, N-2, N-1, N]
-```
+---
 
-| 当前日期 | 最新完整报告 | 数据新鲜度 |
-|---------|-------------|-----------|
-| 1-3月 | N-1年报 | 60-90% |
-| 4月 | N年报 | 100% |
-| 5-7月 | N年报 | 90-100% |
-| 8月 | N半年报 | 100% |
-| 9-10月 | N半年报 | 60-90% |
-| 11-12月 | N三季报 | 100% |
+## 共享方法论
+
+`invest/_shared/references/` 是成员技能的共享方法库（IC 备忘录、估值 DCF、风险仓位、季度深挖、可比公司分析、论点与催化剂），成员以相对 symlink 引用，不复制副本。新增共享方法论只改这一处。
 
 ---
 
 ## 安装使用
 
-### Claude Code
+把本目录下 9 个技能目录复制到技能根（`~/.agents/skills/` 或 `~/.zcode/skills/`），即装即用。可选依赖：`pip3 install yfinance`（美股全量快照）、`EASTMONEY_APIKEY`（港股/东财链路）。
 
 ```bash
-# 克隆技能仓库
-git clone https://github.com/taxueseek/fund-investment-guide.git
-
-# 主入口：询问任何投资相关问题
-"分析这只基金 001938"
-"看看茅台这只股票"
-"黄金现在能配置吗？"
-"让巴菲特和芒格看看这只股"
-```
-
-### 技能文件位置
-
-将技能文件复制到 Claude Code 技能目录：
-
-```
-~/.claude/skills/
-├── invest/SKILL.md                    # 主入口（自动路由）
-├── invest-stock/SKILL.md              # 个股分析
-├── invest-fund/SKILL.md               # 基金分析
-├── invest-convertible/SKILL.md        # 可转债
-├── invest-commodity/SKILL.md          # 大宗商品
-├── invest-reit/SKILL.md               # REITs
-├── invest-allocation/SKILL.md         # 资产配置
-└── zaoren-invest-roundtable/SKILL.md  # 投资圆桌
-```
-
----
-
-## 使用示例
-
-### 个股分析（A股/港股/美股）
-
-```
-用户：分析一下腾讯 00700
-系统：分析腾讯(00700)，进入invest-stock。
-
-三关审查结果：
-- 懂不懂：通过（游戏+广告+投资，业务清晰）
-- 好不好：通过（护城河深厚，ROE持续>15%）
-- 贵不贵：观望（PE在历史70%分位，安全边际不足）
-```
-
-### 基金分析
-
-```
-用户：张坤的基金怎么样？
-系统：分析张坤的基金，进入invest-fund。
-
-关键发现：
-- 代表作管理5年+，穿越牛熊
-- 重仓重合度>80%的克隆基金选费率低的
-- 规模>100亿，灵活性受限
-```
-
-### 资产配置
-
-```
-用户：我的资产配置合理吗？
-系统：进入invest-allocation。
-
-战略配置建议：
-- 股票：60%（基于5年+投资期限）
-- 债券：30%
-- 商品：10%
-
-再平衡触发：偏离目标±5%或季度检查
-```
-
-### 投资圆桌
-
-```
-用户：让巴菲特和芒格看看茅台
-系统：启动投资圆桌，参与大师：巴菲特、芒格。
-
-巴菲特：茅台是理想生意，品牌护城河罕见...
-芒格：同意，但价格包含太多乐观预期...
+# 建议补一个 PATH 入口（可选）
+ln -s "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py" ~/.local/bin/invest-cli
 ```
 
 ---
@@ -154,32 +71,14 @@ git clone https://github.com/taxueseek/fund-investment-guide.git
 
 ---
 
-## 项目结构
-
-```
-invest-series/
-├── invest/                    # 主入口（路由）
-├── invest-stock/              # 个股分析
-├── invest-fund/               # 基金分析
-├── invest-convertible/        # 可转债
-├── invest-commodity/          # 大宗商品
-├── invest-reit/               # REITs
-├── invest-allocation/         # 资产配置
-├── invest-report/             # 财报解读
-├── invest-hk-a/               # 港股/A股专项
-├── invest-us/                 # 美股专项
-├── invest-fund-manager/       # 基金经理研究
-├── zaoren-invest-roundtable/  # 投资圆桌
-└── invest-upgrade/            # 升级工具
-```
-
----
-
 ## 版本历史
 
 | 版本 | 说明 |
 |------|------|
-| v1.0 | 全面重构，统一三关审查框架，动态时间算法，覆盖股基债商+配置+圆桌 |
+| v2.2 | 薄单品种四合一：invest-bond/convertible/commodity/reit → invest-asset（同一三关模板×四种资产参数，注册数 12→9） |
+| v2.1 | 口径统一（cli-runtime 以入口映射表为真源）、回归修复（analyst 路由/导航表）、死引用与断链清理、references 相对 symlink 收敛、invest-cli 命令入口化 |
+| v2.0 | 真源归并 `_shared`、接入 invest-analyst、任务后导航、维护机制 |
+| v1.0 | 全面重构：统一三关审查框架、动态时间算法、覆盖股基债商+配置+圆桌 |
 
 ---
 

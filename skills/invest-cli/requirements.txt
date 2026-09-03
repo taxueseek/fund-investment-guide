@@ -1,3 +1,6 @@
 # Optional local venv for invest-cli (esp. `us` via yfinance)
+# 注意：PyYAML 为硬依赖（scripts/sources/__init__.py 解析 data-sources.yaml），
+# 此前缺失会导致 venv 方案下 datasources 等命令直接 ModuleNotFoundError。
 requests>=2.28
+PyYAML>=6.0
 yfinance>=0.2

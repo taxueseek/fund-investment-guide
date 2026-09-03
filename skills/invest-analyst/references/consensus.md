@@ -29,8 +29,8 @@
 
 | 步骤 | 依赖的 skill |
 |------|-------------|
-| 搜索机构研报/评级 | eastmoney |
-| 市场数据/PE/估值 | web_search + stock-analysis（如可用）|
+| 搜索机构研报/评级 | argo 财经检索（invest-cli info）|
+| 市场数据/PE/估值 | invest-cli stock/us（行情与估值快照）|
 | 个股基本面 | invest-stock（需要判断一致预期是否合理时）|
 | 多视角 | invest-discuss（需要挑战共识时）|
 

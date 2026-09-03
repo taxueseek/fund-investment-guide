@@ -2,7 +2,7 @@
 
 用法:
     invest-cli datasources            # 表格输出
-    invest-cli datasources --json     # 结构化 JSON（供 skill 层路由）
+    invest-cli datasources --json     # 诊断：可用性 + 默认快照链；取数不要每次前置
 """
 from __future__ import annotations
 
@@ -23,7 +23,11 @@ def run(detect_only: bool = False, as_json: bool = False) -> int:
         return 1
 
     if as_json:
-        print(json.dumps(states, ensure_ascii=False, indent=2))
+        from sources.route import chains
+
+        payload = dict(states)
+        payload["_chains"] = chains()
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
     # 可读表格
@@ -40,4 +44,11 @@ def run(detect_only: bool = False, as_json: bool = False) -> int:
     print("  " + "-" * 62)
     avail = registry.available_ids()
     print(f"\n  当前可用数据源（按优先级）: {', '.join(avail) if avail else '无'}")
+    from sources.route import chains
+
+    ch = chains()
+    print("\n  默认快照链（yaml × 真方法 × 可用性，整单回退）")
+    for name, ids in ch.items():
+        print(f"    {name:<10} {' > '.join(ids) if ids else '无'}")
+    print("  组合规则: 同一问题不混源；行情/诊断/选股/资讯是不同问题才并行选源。")
     return 0

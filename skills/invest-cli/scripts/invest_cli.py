@@ -3,9 +3,9 @@
 invest-cli — 投资分析 CLI 工具（主入口）
 
 用法:
-    invest-cli stock <代码/名称>    A股/港股分析（东财）
-    invest-cli fund <代码/名称>     基金分析（东财）
-    invest-cli us <代码>            美股分析（yfinance）
+    invest-cli stock <代码/名称>    A股/港股分析（A股同花顺优先，港股东财）
+    invest-cli fund <代码/名称>     基金分析（同花顺优先，失败回退东财）
+    invest-cli us <代码>            美股分析（yfinance，缺省回退 Bitget rToken 报价）
     invest-cli screen <条件>        选股（东财）
     invest-cli datasources          列出并探测数据源可用性
     invest-cli wind <server_type> <tool> --input '<json>'  透传万得 Wind
@@ -18,7 +18,7 @@ invest-cli — 投资分析 CLI 工具（主入口）
 示例:
     invest-cli stock 600519
     invest-cli stock 茅台 --json
-    invest-cli fund 006195
+    invest-cli fund 110011
     invest-cli us AAPL
     invest-cli screen "市盈率低于10的银行股"
     invest-cli datasources
@@ -34,9 +34,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def cmd_stock(args):
-    from cmd_stock import resolve_code, fetch_stock_data, format_terminal
-    code = resolve_code(args.keyword)
-    data = fetch_stock_data(code)
+    from cmd_stock import fetch_stock_with_fallback, format_terminal
+    try:
+        data = fetch_stock_with_fallback(args.keyword)
+    except Exception as e:
+        print(f"错误: {e}", file=sys.stderr)
+        sys.exit(1)
     if args.json:
         import json
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -45,9 +48,12 @@ def cmd_stock(args):
 
 
 def cmd_fund(args):
-    from cmd_fund import resolve_fund_code, fetch_fund_data, format_terminal
-    code = resolve_fund_code(args.keyword)
-    data = fetch_fund_data(code)
+    from cmd_fund import fetch_fund_with_fallback, format_terminal
+    try:
+        data = fetch_fund_with_fallback(args.keyword)
+    except Exception as e:
+        print(f"错误: {e}", file=sys.stderr)
+        sys.exit(1)
     if args.json:
         import json
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -56,8 +62,12 @@ def cmd_fund(args):
 
 
 def cmd_us(args):
-    from cmd_us import fetch_us_data, format_terminal
-    data = fetch_us_data(args.symbol)
+    from cmd_us import fetch_us_with_fallback, format_terminal
+    try:
+        data = fetch_us_with_fallback(args.symbol)
+    except Exception as e:
+        print(f"错误: {e}", file=sys.stderr)
+        sys.exit(1)
     if args.json:
         import json
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -81,22 +91,14 @@ def parse_markdown_table(md: str) -> list[dict]:
 
 
 def cmd_screen(args):
-    """选股 - 调用东方财富选股 API"""
-    import requests
-    api_key = os.getenv("EASTMONEY_APIKEY")
-    if not api_key:
-        print("错误: 未设置 EASTMONEY_APIKEY", file=sys.stderr)
-        sys.exit(1)
+    """选股：走 route.fetch('screen')，与 intent screen / 快照链同一入口。"""
+    from sources.route import fetch
 
-    url = "https://mkapi2.dfcfs.com/finskillshub/api/claw/stock-screen"
-    resp = requests.post(
-        url,
-        headers={"apikey": api_key, "Content-Type": "application/json"},
-        json={"keyword": args.condition, "pageNo": 1, "pageSize": 20},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    result = resp.json()
+    res = fetch("screen", args.condition)
+    if not res.get("ok"):
+        print(f"错误: {res.get('error')}", file=sys.stderr)
+        sys.exit(1)
+    result = res.get("data") or {}
 
     if args.json:
         import json
@@ -153,11 +155,6 @@ def cmd_wind(args):
 def cmd_yingmi(args):
     from cmd_yingmi import run
     sys.exit(run(args.tool_name, args.input, as_json=args.json))
-
-
-def cmd_ttfund(args):
-    from cmd_ttfund import run
-    sys.exit(run(args.args, as_json=args.json))
 
 
 def cmd_intent(args):
@@ -227,11 +224,6 @@ def main():
     p_ym.add_argument("--input", default="{}", help="参数 JSON")
     p_ym.add_argument("--json", action="store_true")
 
-    # ttfund（天天基金场景透传）
-    p_tt = subparsers.add_parser("ttfund", help="透传天天基金 ttfund 场景命令")
-    p_tt.add_argument("args", nargs=argparse.REMAINDER, help="ttfund 子命令与参数")
-    p_tt.add_argument("--json", action="store_true")
-
     # intent（意图层，收敛接口面）
     p_int = subparsers.add_parser("intent", help="按意图取数（deep/screen/portfolio/plan/macro/present）")
     p_int.add_argument("scene", help="语义场景：deep/screen/portfolio/plan/macro/present")
@@ -267,7 +259,6 @@ def main():
         "datasources": cmd_datasources,
         "wind": cmd_wind,
         "yingmi": cmd_yingmi,
-        "ttfund": cmd_ttfund,
         "intent": cmd_intent,
         "info": cmd_info,
         "watchlist": cmd_watchlist,

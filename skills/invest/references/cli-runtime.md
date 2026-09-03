@@ -1,6 +1,6 @@
 # CLI Runtime（数据 skill 统一约定）
 
-一行原则：**PATH 优先，skill 树兜底；禁止写死个人家目录。**
+一行原则：**PATH 优先，skill 树兜底；禁止写死个人家目录。** 取数口径以 invest 入口「场景 → invest-cli 取数映射」表为真源，本文件只管运行时解析与分工。
 
 ## 解析顺序
 
@@ -23,14 +23,14 @@ command -v ttfund fundfof fundscreen
 | 查净值、持仓、账户、登录、回测组合 | **ttfund** | 不要用 fundfof 代替账户 |
 | 公开排行、夏普/卡玛、热力、ETF 资金、见基 | **fundfof** | fundscreen 仅当 fundfof 不可用且已装 ttfund |
 | 已登录天天、要在 ttfund 净值上本地算指标 | **fundscreen** | 非默认筛选入口 |
-| A/港/美股结构化快照、东财选股 | **invest-cli** | 需 `EASTMONEY_APIKEY`（美股仅 yfinance） |
+| A/港/美股结构化快照、东财选股 | **invest-cli** | A股/基金默认同花顺（免 key）；东财链路需 `EASTMONEY_APIKEY`（港股必经）；美股 yfinance 未装回退 bitget |
 | 值不值得买、三关/场景判断 | **invest-*** 框架 | 先取数再套框架，不反客为主 |
 
 ## 模糊词默认
 
 | 用户说 | 默认 |
 |--------|------|
-| 「诊断一下 005827」（无买/不买） | fundfof diagnose（公开指标） |
+| 「诊断一下 005827」（无买/不买） | invest-cli `intent deep fund`（盈米诊断雷达）；不可用再 fundfof diagnose |
 | 「这只基金怎么样 / 值不值得」 | invest-fund（判断） |
 | 「我的持仓 / 净值」 | ttfund |
 | 「筛选夏普>1.5」 | fundfof screen/rank |

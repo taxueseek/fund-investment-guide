@@ -170,9 +170,7 @@ description: |
 在各类别内选择具体标的时，可使用：
 - 股票 → invest-stock
 - 基金 → invest-fund
-- 可转债 → invest-convertible
-- 商品 → invest-commodity
-- REITs → invest-reit
+- 债券/可转债/商品/REITs → invest-asset（按资产加载细则）
 
 ---
 
@@ -184,6 +182,6 @@ description: |
 
 取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
-1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
-2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
+1. 直接按场景取数（`intent portfolio/plan` 等）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令
 3. 标注数据来源，口径不一致不合并

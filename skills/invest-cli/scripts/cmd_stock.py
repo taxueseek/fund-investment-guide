@@ -16,8 +16,7 @@ EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 def get_api_key():
     key = os.getenv("EASTMONEY_APIKEY")
     if not key:
-        print("错误: 未设置 EASTMONEY_APIKEY 环境变量", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("未设置 EASTMONEY_APIKEY 环境变量")
     return key
 
 
@@ -82,8 +81,30 @@ def resolve_code(keyword: str) -> str:
     return known.get(keyword, keyword)
 
 
+def _looks_like_hk(keyword: str) -> bool:
+    """与 cmd_intent/hithink 共用同一 HK 判定（单一实现）。"""
+    from sources.hithink import looks_like_hk
+
+    t = (keyword or "").strip()
+    # 6 位纯数字必属 A 股/基金体系，先短路，避免 resolve_code 前缀误判
+    if t.isdigit() and len(t) == 6:
+        return False
+    if looks_like_hk(t):
+        return True
+    code = resolve_code(t)
+    return code.isdigit() and len(code) == 5
+
+
+def fetch_stock_with_fallback(keyword: str) -> dict:
+    """A 股/港股快照：由 route.pick 按 yaml×真方法×可用性选源，整单回退。"""
+    from sources.route import fetch, unwrap_snapshot
+
+    market = "hk" if _looks_like_hk(keyword) else "a"
+    return unwrap_snapshot(fetch("stock", keyword, market=market))
+
+
 def fetch_stock_data(code: str) -> dict:
-    """获取股票完整数据"""
+    """获取股票完整数据（东财）。"""
 
     # 1. 行情 + 估值
     r1 = query_eastmoney(f"{code}股票最新行情 市盈率PE 市净率PB 总市值 收盘价 开盘价")
@@ -121,23 +142,28 @@ def fetch_stock_data(code: str) -> dict:
 def format_terminal(data: dict) -> str:
     lines = []
     d = data.get("data", {})
-    name = data.get("name", data["code"])
+    name = data.get("name") or data.get("code") or "未知标的"
 
     lines.append(f"\n{'=' * 60}")
     lines.append(f"  {name} — 行情快照")
     lines.append(f"{'=' * 60}")
 
     # 行情
+    quote = data.get("quote") or {}
+    valuation = data.get("valuation") or {}
     quote_keys = [
-        ("收盘价", "收盘价"), ("开盘价", "开盘价"),
-        ("市盈率PE(TTM)", "PE(TTM)"), ("市净率PB", "PB"),
-        ("总市值", "总市值"),
+        ("收盘价", "收盘价", quote.get("last")), ("开盘价", "开盘价", quote.get("open")),
+        ("昨收", "昨收", quote.get("prev") or d.get("昨收")),
+        ("市盈率PE(TTM)", "PE(TTM)", valuation.get("pe_ttm")), ("市净率PB", "PB", valuation.get("pb_mrq")),
+        ("总市值", "总市值", None),
     ]
     lines.append(f"\n  {'指标':<14} {'数值':>16}")
     lines.append(f"  {'-' * 32}")
-    for api_key, label in quote_keys:
-        val = d.get(api_key, "-")
-        lines.append(f"  {label:<14} {str(val):>16}")
+    for api_key, label, structured in quote_keys:
+        val = d.get(api_key)
+        if val in (None, "", "-"):
+            val = structured
+        lines.append(f"  {label:<14} {str(val if val is not None else '-'):>16}")
 
     # 财务
     fin_keys = [
@@ -166,8 +192,31 @@ def format_terminal(data: dict) -> str:
             val = d.get(api_key, "-")
             lines.append(f"  {label:<14} {str(val):>16}")
 
-    lines.append(f"\n  数据时间: {data['timestamp']}")
-    lines.append(f"  数据来源: 东方财富")
+    hist = data.get("financials_history") or []
+    if hist:
+        lines.append(f"\n  {'年度':<8}{'营收':>14}{'净利润':>14}{'毛利率':>10}{'ROE':>10}")
+        lines.append(f"  {'-' * 56}")
+        for row in hist:
+            year = row.get("fiscal_year", "-")
+            rev = row.get("revenue")
+            np_ = row.get("net_profit")
+            gm = row.get("gross_margin")
+            roe = row.get("roe_ending")
+            fin = data.get("financials") or {}
+            if fin.get("fiscal_year") == year and fin.get("roe") is not None:
+                roe = fin.get("roe")
+            rev_s = f"{rev / 1e8:.2f}亿" if isinstance(rev, (int, float)) else "-"
+            np_s = f"{np_ / 1e8:.2f}亿" if isinstance(np_, (int, float)) else "-"
+            gm_s = f"{gm:.1f}%" if isinstance(gm, (int, float)) else "-"
+            roe_s = f"{roe:.1f}%" if isinstance(roe, (int, float)) else "-"
+            lines.append(f"  {str(year):<8}{rev_s:>14}{np_s:>14}{gm_s:>10}{roe_s:>10}")
+
+    src = data.get("source_label") or data.get("source") or "东方财富"
+    lines.append(f"\n  数据时间: {data.get('timestamp', '-')}")
+    lines.append(f"  数据来源: {src}")
+    warns = data.get("warnings") or []
+    if warns:
+        lines.append(f"  警告: {'; '.join(warns)}")
     return "\n".join(lines)
 
 
@@ -178,9 +227,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = parser.parse_args()
 
-    code = resolve_code(args.keyword)
     try:
-        data = fetch_stock_data(code)
+        data = fetch_stock_with_fallback(args.keyword)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)

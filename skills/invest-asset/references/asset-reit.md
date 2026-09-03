@@ -1,14 +1,7 @@
----
-name: invest-reit
-description: |
-  invest系列：REITs分析。判断单一REIT是否值得买入或持有：底层资产优质吗？分派率可持续吗？估值合理吗？
-
-  触发：「分析这只REIT」「REITs怎么样」「公募REIT值得买吗」「分派率」「底层资产」
----
-
-# invest-reit：REITs分析
+# REITs 资产细则（reit）
 
 > REITs是"不动产的股票化"。看的是底层资产质量，吃的是租金现金流。
+> 本文件由 invest-asset 在识别到「REIT/REITs/公募REIT/分派率/底层资产」时加载。
 
 ---
 
@@ -234,7 +227,7 @@ description: |
 
 ---
 
-*invest-reit v1.0 | 三关审查 | 动态时间算法*
+*本分析基于公开信息，不构成投资建议。*
 ```
 
 ---
@@ -243,8 +236,8 @@ description: |
 
 | 场景 | 路由 |
 |------|------|
-| 「分析这只REIT」 | invest-reit |
-| 「分析REITs管理人」 | invest-fund-manager（如适用） |
+| 「分析这只REIT」 | invest-asset（本文件） |
+| 「分析REITs管理人」 | invest-fund（如适用） |
 | 「分析REITs持仓股票」 | invest-stock |
 
 ---
@@ -259,7 +252,7 @@ description: |
 
 ---
 
-*invest-reit v1.0 | 三关审查 | 动态时间算法*
+*asset-reit v1.0 | 三关审查 | 动态时间算法 | 2026-09-03 自 invest-reit 迁入*
 
 ---
 
@@ -267,6 +260,6 @@ description: |
 
 取数统一走数据层 `invest-cli`，不靠 web_search 猜数据：
 
-1. 先探测可用源：`python ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources --json`
-2. 按 invest 主入口「场景 → 取数映射表」选择具体命令（fund 用 `invest-cli fund`，stock 用 `invest-cli stock`，us 用 `invest-cli us`，债券 `ttfund bond`，黄金 `ttfund gold`，宏观 `ttfund macro` 等）
+1. 直接按场景取数（REIT 走 `invest-cli fund`）。`datasources` 只在排查「为什么没数据」时跑，不要每次前置。
+2. 按 invest 主入口「场景 → 取数映射表」选择具体命令
 3. 标注数据来源，口径不一致不合并

@@ -87,9 +87,7 @@ npx skills add taxueseek/fund-investment-guide
 |:--------|:-------|:---------|:---------|
 | 某只股票 | invest-stock | 懂生意吗？有护城河吗？价格合适吗？ | A股、港股、美股 |
 | 某只基金 | invest-fund | 懂策略吗？能跑赢吗？成本合理吗？ | 主动基金、ETF、QDII |
-| 可转债 | invest-convertible | 债底够吗？溢价合理吗？ | A股可转债 |
-| 黄金/原油 | invest-commodity | 逻辑清晰吗？位置合理吗？ | 大宗商品 |
-| REITs | invest-reit | 资产质量如何？分派可持续吗？ | 国内外REITs |
+| 可转债/黄金原油/REITs/债券 | invest-asset | 债券：偿付+利差+位置；可转债：条款+债底+溢价；商品：逻辑+位置+波动；REITs：底层+运营+估值 | 债市/大宗/国内外REITs |
 | 整体配置 | invest-allocation | 股债比例合理吗？再平衡了吗？ | 跨资产组合 |
 | 拿不准？ | invest-discuss | 让多种投资思维同时审视 | 任何标的 |
 | /cli 分析 | invest-cli | 终端数据获取 + 分析框架 | A股/港股/美股/基金 |
@@ -134,7 +132,15 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
-## v2.0.5 增量（本版）
+## v2.2 增量（本版）
+
+- **薄单品种四合一**：invest-bond / invest-convertible / invest-commodity / invest-reit → invest-asset（同一「三关审查」骨架 × 四种资产参数；注册数 12→9）
+- **资产细则下沉**：债券/可转债/商品（含黄金十维度）/REITs 的专属三关、指标表、一票否决、时间定位、输出模板，收敛到 `skills/invest-asset/references/asset-*.md` + `commodity-gold.md`
+- **数据措辞统一**：残留 `ttfund bond` / `ttfund gold` 老 CLI 措辞改为 `intent deep bond` / `intent deep commodity`（官方 TTFUND_GOLD_INFO 已封装进 intent）
+- **invest-cli 演进同步**：退役 cmd_ttfund.py / ttfund.py，接入 ttskill 官方源 + hithink/bitget/route 回退链与契约测试（本地 09-03 多笔修复：hithink 部分失败整单回退、探测缓存等一并入包）
+- **引用面消毒**：invest 入口路由/图谱、README、CHANGELOG、macro/allocation/analyst 分工表全部改指 invest-asset；历史原文见本地 `~/.claude/skills-archive/2026-09-03_merged-invest-asset/`
+
+## v2.0.5 增量
 
 - **配置门闩**：东财 Key / yfinance / 可选 ttfund 探测通过后，才启用对应 CLI 取数
 - **invest-cli 加固**：路径可移植、字段别名、JSON 契约、易方达蓝筹映射 **005827**、友好「如何启用」报错
@@ -320,12 +326,10 @@ skills/
 ├── invest/                    # 主入口：自动识别标的类型
 ├── invest-stock/              # 个股分析（三关审查/四维评分/机构深度/港A增强）
 ├── invest-fund/               # 基金分析（场景路由A/B/C/E/F/G）
-├── invest-convertible/        # 可转债分析
-├── invest-commodity/          # 大宗商品分析
-├── invest-reit/               # REITs分析
+├── invest-asset/              # 单品种资产：债券/可转债/商品（含黄金十维度）/REITs
 ├── invest-allocation/         # 资产配置
 ├── invest-discuss/            # 大师会诊（多视角验证）
-└── invest-cli/                # 数据适配CLI（东财/yfinance，配置后启用）
+└── invest-cli/                # 数据适配CLI（东财/yfinance/ttskill等，配置后启用）
 ```
 
 ---
@@ -334,6 +338,7 @@ skills/
 
 | 版本 | 日期 | 变更内容 |
 |:-----|:-----|:---------|
+| v2.2 | 2026-09 | 薄单品种四合一：invest-bond/convertible/commodity/reit → invest-asset（同一三关骨架×四资产参数，注册数 12→9）；invest-cli 退役 cmd_ttfund/ttfund、接入 ttskill 官方源与 hithink/bitget/route 回退链；引用面消毒 |
 | v2.0.5 | 2026-08 | 统一多源数据层（invest-cli 接入 Wind/盈米/东财/yfinance/天天基金 + argo 财经垂直源；intent 意图层收敛接口面、datasources 探测）；新增 invest-bond/invest-macro；黄金十维度并入 invest-commodity；合并 invest-hk-a/us/institutional 进 invest-stock，单一入口降 token |
 | v2.0.2 | 2026-07 | 配置门闩 + 数据源引导（东财/yfinance/可选天天基金）；invest-cli 工程加固；公开路由消毒与死链清理 |
 | v2.0 | 2026-06 | 统一框架升级：invest-stock合并原invest-hk-a/invest-us/invest-institutional，invest-fund新增场景路由，新增invest-discuss/invest-cli，移除invest-report/invest-fund-manager/invest-upgrade/zaoren-invest-roundtable |
@@ -433,9 +438,7 @@ User Question
 |:--------------------|:----------|:--------------|:-------------------|
 | A specific stock | invest-stock | Understand the business? Moat? Right price? | A-shares, HK stocks, US stocks |
 | A specific fund | invest-fund | Understand the strategy? Can beat benchmark? Cost reasonable? | Active funds, ETFs, QDII |
-| Convertible bonds | invest-convertible | Bond floor sufficient? Premium reasonable? | A-share convertible bonds |
-| Gold/Oil | invest-commodity | Logic clear? Position reasonable? | Commodities |
-| REITs | invest-reit | Asset quality? Distribution sustainable? | Domestic and international REITs |
+| Convertible bonds / Gold & Oil / REITs / Bonds | invest-asset | Bonds: solvency+spread+position; Convertibles: terms+floor+premium; Commodities: logic+position+volatility; REITs: assets+operations+valuation | Bond market / Commodities / REITs |
 | Overall allocation | invest-allocation | Stock-bond ratio reasonable? Rebalanced? | Cross-asset portfolio |
 | Not sure? | invest-discuss | Let multiple investment minds examine together | Any target |
 | /cli analysis | invest-cli | Terminal data fetch + analysis framework | A/HK/US stocks, funds |
@@ -558,12 +561,10 @@ skills/
 ├── invest/                    # Entry: auto-identifies target type
 ├── invest-stock/              # Stock analysis (3-Gate/4-Dimension/Institutional Deep/HK-A)
 ├── invest-fund/               # Fund analysis (Scene routing A/B/C/E/F/G)
-├── invest-convertible/        # Convertible bond analysis
-├── invest-commodity/          # Commodity analysis
-├── invest-reit/               # REITs analysis
+├── invest-asset/               # Single-asset: Bonds/Convertibles/Commodities (incl. gold 10D)/REITs
 ├── invest-allocation/         # Asset allocation
 ├── invest-discuss/            # Masters discussion (multi-perspective validation)
-└── invest-cli/                # Data adapter CLI (Eastmoney/yfinance; config-gated)
+└── invest-cli/                # Data adapter CLI (Eastmoney/yfinance/ttskill; config-gated)
 ```
 
 ---
@@ -572,6 +573,7 @@ skills/
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
+| v2.2 | 2026-09 | Thin single-asset 4-in-1: invest-bond/convertible/commodity/reit → invest-asset (same 3-gate skeleton × 4 asset params; registry 12→9); invest-cli retired cmd_ttfund/ttfund, adopted ttskill official source + hithink/bitget/route fallback chain; reference cleanup |
 | v2.0.5 | 2026-08 | Unified multi-source data layer (invest-cli: Wind/YingMi/Eastmoney/yfinance/ttfund + argo finance verticals; intent intent-layer convergence; datasources probe); new invest-bond/invest-macro; gold 10-dimension merged into invest-commodity; merged invest-hk-a/us/institutional into invest-stock (single entry, lower token) |
 | v2.0.2 | 2026-07 | Config gates + data-source guide; invest-cli hardening; public route sanitization |
 | v2.0 | 2026-06 | Unified framework: invest-stock merged HK/US/Institutional, invest-fund scene routing, new invest-discuss/invest-cli |
