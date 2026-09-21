@@ -4,11 +4,21 @@ A股/港股分析 - 快照走 route.fetch（同花顺主路，失败整单回退
 输出：实时行情 + 估值指标 + 财务数据（对标 invest-stock 三关框架）
 """
 
-import os
 import sys
 import json
-import requests
+import warnings
 from datetime import datetime
+
+# urllib3 2.x 在 LibreSSL 环境下导入时 emit NotOpenSSLWarning，直接写 stderr。
+# CLI 的 stderr 是错误通道，不该被库噪音占据（agent 解析错误信息会被带偏）。
+# 必须在 import requests **之前**装过滤器，否则告警已在导入期发出。
+#
+# 注意 category 必须写 Warning 而不是 UserWarning：该告警的继承链是
+# NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning，
+# 与 UserWarning 无继承关系，用 UserWarning 或 message 正则都拦不住
+# （实测两者均无效，只有按 Warning + module 才生效）。
+warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
+import requests  # noqa: E402
 
 EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
@@ -106,25 +116,119 @@ def fetch_stock_with_fallback(keyword: str) -> dict:
     return unwrap_snapshot(fetch("stock", keyword, market=market))
 
 
+def _name_matches_code(entity_name: str, code: str) -> bool:
+    """东财 entityName（如「贵州茅台(600519.SH)」）是否与查询代码确有对应。
+
+    这是「行情缺失但财务可用」情形的最后一道闸门：只有在实体名里能找到
+    用户查询的代码才算匹配到同一标的，避免把模糊匹配到的别家公司放行。
+
+    比较时归一化：查询侧去掉非字母数字（港股/美股可能带点号），
+    实体侧同样归一化后做子串判断；代码长度 < 2 时一律不放行（过于宽松）。
+    """
+    import re as _re
+
+    norm_code = _re.sub(r"[^0-9A-Za-z]", "", (code or "")).upper()
+    if len(norm_code) < 2:
+        return False
+    norm_name = _re.sub(r"[^0-9A-Za-z]", "", (entity_name or "")).upper()
+    return norm_code in norm_name
+
+
 def fetch_stock_data(code: str) -> dict:
-    """获取股票完整数据（东财）。"""
+    """获取股票完整数据（东财）。
 
-    # 1. 行情 + 估值
-    r1 = query_eastmoney(f"{code}股票最新行情 市盈率PE 市净率PB 总市值 收盘价 开盘价")
-    t1 = parse_tables(r1)
+    三组查询（行情/财务/年报）相互独立，串行会让三段 RTT 相加。
+    并发取数不改变任何字段口径，只是不再叠加等待时间。
+    单个查询失败时该组记为空表，与串行版本的降级行为完全一致。
+    """
+    from concurrent.futures import ThreadPoolExecutor
 
-    # 2. 财务指标（ROE/毛利率/净利率/负债率）
-    r2 = query_eastmoney(f"{code}股票财务指标 净资产收益率ROE 销售毛利率 销售净利率 资产负债率 每股收益EPS")
-    t2 = parse_tables(r2)
+    queries = [
+        f"{code}股票最新行情 市盈率PE 市净率PB 总市值 收盘价 开盘价",
+        f"{code}股票财务指标 净资产收益率ROE 销售毛利率 销售净利率 资产负债率 每股收益EPS",
+        f"{code}股票年报 营业收入 净利润 营收增速 净利润增速 经营活动产生的现金流量净额",
+    ]
 
-    # 3. 年报业绩
-    r3 = query_eastmoney(f"{code}股票年报 营业收入 净利润 营收增速 净利润增速 经营活动产生的现金流量净额")
-    t3 = parse_tables(r3)
+    # 用哨兵区分「取数失败」与「取数成功但没有数据」——两者绝不能混为一谈：
+    #   · 成功但空  → 说明东财没匹配到这个标的（可据此判未找到）；
+    #   · 请求失败  → 是传输层问题，与标的是否存在无关，不能据此下任何结论。
+    # 旧实现把两者都记成 []，会导致「行情那一组恰好失败」时把一只正常股票
+    # 误报为「未找到」，甚至编出「模糊匹配到别家」的错误说明。
+    _FAILED = object()
+
+    def _one(q: str):
+        """单个查询：成功返回行列表（可能为空），失败返回 _FAILED。"""
+        try:
+            return parse_tables(query_eastmoney(q))
+        except RuntimeError as e:
+            if "EASTMONEY_APIKEY" in str(e):
+                raise  # 配置缺失：必须让调用方看见真实原因
+            return _FAILED
+        except Exception:
+            return _FAILED
+
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        r1, r2, r3 = pool.map(_one, queries)
+
+    # 三组全失败 → 是取数问题，如实上报，不要伪装成「标的不存在」
+    if r1 is _FAILED and r2 is _FAILED and r3 is _FAILED:
+        raise RuntimeError(f"东财取数失败（{code}）：三组查询均未成功，请稍后重试")
+
+    t1 = [] if r1 is _FAILED else r1
+    t2 = [] if r2 is _FAILED else r2
+    t3 = [] if r3 is _FAILED else r3
+    # 语义修正：只有行情组（r1）的失败才影响「能否确认标的」；
+    # r2/r3 是财务/年报组的传输失败，与实体一致性判断无关（旧写法会在
+    # 财务组偶发失败时把可放行的停牌场景误拦）。与 cmd_fund 的 _basic_failed 对齐。
+    _quote_failed = r1 is _FAILED
 
     # 合并：取每个结果的第一行（最新数据）
     quote = t1[0] if t1 else {}
     financial = t2[0] if t2 else {}
     annual = t3[0] if t3 else {}
+
+    # 一致性校验：东财对未知标的会**模糊匹配到另一家公司**并正常返回数据。
+    # 实测：查「不存在的公司XYZ」→ 返回 Block Inc-A(XYZ.N) 的 ROE/毛利率，
+    # 且 quote 表为空、financial 表非空，旧实现把它的财务挂到用户输入的
+    # name 下并以 exit=0 输出——用户会以为拿到了自己查的那家公司。
+    #
+    # 判据必须同时满足三条才放行「行情缺失但有财务」的情形，缺一不可：
+    #   ① 行情那一组请求**成功**（失败是传输问题，不能据此下任何结论）；
+    #   ② 至少**两张**非行情表给出 entityName，且彼此一致；
+    #   ③ 该 entityName 与用户查询的代码/名称**确有对应关系**。
+    # 单张表有值不足以放行——「不存在的公司XYZ」正是只有 financial 一张表
+    # 有值（实测），只数一张表就会把 Block Inc-A 的数据当成用户要的标的。
+    if not quote:
+        if _quote_failed:
+            raise RuntimeError(
+                f"东财取数失败（{code}）：行情查询未成功，无法确认标的，请稍后重试"
+            )
+        others = [d for d in (financial, annual) if d]
+        names = [d.get("entityName", "") for d in others if d.get("entityName")]
+        distinct = set(names)
+        # 需要 ≥2 张表且名称一致，且该名称与查询代码确有关联，才认为匹配到同一标的
+        if len(names) >= 2 and len(distinct) == 1 and _name_matches_code(distinct.pop(), code):
+            snapshot_name = names[0]
+            merged = {}
+            for d in others:
+                for k, v in d.items():
+                    if k != "entityName" and v:
+                        merged[k] = v
+            return {
+                "code": code,
+                "name": snapshot_name,
+                "timestamp": datetime.now().isoformat(),
+                "data": merged,
+                "raw_tables": {"quote": t1, "financial": t2, "annual": t3},
+                "note": "行情缺失（可能停牌/无成交），以下为财务口径数据",
+            }
+        if others:
+            got = others[0].get("entityName", "")
+            raise ValueError(
+                f"未找到标的「{code}」的行情数据"
+                + (f"（东财模糊匹配到 {got}，已丢弃以免误导）" if got else "")
+            )
+        raise ValueError(f"未找到标的「{code}」的数据，请确认代码或名称")
 
     # 合并所有字段到一个 flat dict
     merged = {}

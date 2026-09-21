@@ -17,6 +17,7 @@
 | 同花顺金融数据服务 | API | stock / fund（A 股与公募） | 60 | `HITHINK_FINANCE_API_KEY` 或用户级 `credentials.env` |
 | 东方财富 | API | stock / fund / screen | 50 | 设置 `EASTMONEY_APIKEY` |
 | Yahoo Finance（yfinance） | python | us | 40 | 安装 `yfinance` |
+| SEC EDGAR（美股财报原文） | API | us 财报原文（10-K XBRL 指标 + 申报清单） | 45 | 免费无 key（可选 `SEC_EDGAR_USER_AGENT` 声明身份）；`invest-cli sec <代码>` 直取，不经快照链 |
 | Bitget rToken | API | us（仅行情） | 35 | 始终可用（公开 API，无 key，stdlib） |
 | 天天基金（官方 ttskill，可选深取引擎） | CLI | fund（同类分位/机构占比/在管列表深取） | 55 | `ttskill` 已登录且装齐业务包；缺省自动跳过（主路=自带 hithink>eastmoney） |
 
@@ -65,28 +66,39 @@
 
 | 类别 | 数据源 | 特点 | 用在哪 |
 | --- | --- | --- | --- |
-| 结构化权威 | 盈米 / Wind / 同花顺 / 东财 / yfinance / Bitget(rToken 行情) | 精确但限额、部分需 key | 净值 / 行情 / 财务 / 筛选 / 配置 |
+| 结构化权威 | 盈米 / Wind / 同花顺 / 东财 / yfinance / SEC EDGAR / Bitget(rToken 行情) | 精确但限额、部分需 key（SEC 免费无 key） | 净值 / 行情 / 财务 / 财报原文 / 筛选 / 配置 |
 | 检索资讯 | argo（eastmoney/zhihu/cninfo/财经垂直源） | 广覆盖、低成本、需核验 | 资讯 / 舆情 / 宏观背景 / 观点；结构化源兜底 |
 
 **降级链**：结构化源 → 同域其他结构化源 → `invest-cli info <词>`（argo 检索，结果需核验）。
 **省配额**：资讯 / 舆情 / 宏观背景优先用 `invest-cli info <词>`，把盈米 / Wind 的配额留给结构化数值取数。
 **取代关系**：`invest-cli intent` 是主取数入口（分析层不再直接依赖盈米/Wind skill，二者降为后端数据源）；argo 仅作检索资讯与兜底。
 
-### argo 宏观 / 财经垂直源池（环节配额）
+### argo 财经垂直源池
 
-`invest-cli info <词> --engine <源>` 可从这些垂直源取数，把盈米/Wind 配额留给结构化取数：
+`invest-cli info <词> --engine <源>` 可从 argo 的垂直源取数，把盈米/Wind 配额留给结构化取数。
 
-| 引擎 | 领域 | 需 key |
+**引擎清单不在 invest-cli 维护**：argo 自带 250+ 引擎且随版本演进，任何本地白名单都会
+漂移（曾出现白名单里的 `cn-web-search` 已不存在 → 用户拿到「0 结果 + ok=true」的静默空答复；
+合法引擎如 anysearch 被静默换成 eastmoney）。现在引擎名原样透传，传错会明确报错：
+
+```bash
+python3 <argo>/scripts/search.py --list-engines          # 全部引擎
+python3 <argo>/scripts/search.py --list-engines --detail # 含 key/熔断/可路由状态
+```
+
+投资场景常用的几个：
+
+| 引擎 | 领域 | 备注 |
 | --- | --- | --- |
-| nbs_stats | 国家统计局（GDP/CPI/工业等） | 否 |
-| jin10 / cls_telegraph / em_flow / em_global_news / em_miaoxiang | 财经快讯/资讯 | 否 |
-| eastmoney / cninfo / cn_ai_news | 东财/上市公司披露/资讯 | 否 |
-| finviz / fx_rate / gdelt / coingecko | 美股可视化/汇率/全球事件/加密 | 否 |
-| fred | 圣路易斯联储（联邦基金利率/美债等） | 是（需 FRED key） |
-| eurostat / eu_opendata / fr_opendata | 欧盟/欧洲官方统计 | 是 |
-| worldbank | 世界银行数据 | 是 |
+| eastmoney / cninfo / cn_ai_news | 东财资讯 / 上市公司披露 / AI 资讯 | 免 key，`info` 默认 eastmoney |
+| jin10 / cls_telegraph / em_flow / em_global_news / em_miaoxiang | 财经快讯 / 资金流 / 全球资讯 | 免 key |
+| finviz / fx_rate / gdelt / coingecko | 美股可视化 / 汇率 / 全球事件 / 加密 | 免 key |
+| nbs_stats | 国家统计局（GDP/CPI/工业等） | 免 key，`intent macro` 的 argo 兜底引擎 |
+| zhihu / anysearch | 中文观点 / 通用中文检索 | 免 key |
+| fred / eurostat / eu_opendata / worldbank / fr_opendata | 欧美官方统计 | 需各自 key；未配置时 argo 会给出原因 |
 
-`intent macro` 默认走 nbs_stats（无需 key）；如需 fred/eurostat，请先配置对应 API key。
+`intent macro` 取数顺序：**FRED 结构化净流动性优先**（`sources/fred.py`，有 key 走官方 API、
+无 key 走 fredgraph.csv），失败或取不到净流动性时才降级为 `info --engine nbs_stats` 检索兜底。
 
 ---
 
@@ -123,6 +135,33 @@ pip3 install yfinance
 启用能力：`invest-cli us`（yfinance 全量快照：估值/财务/评级）。
 
 **Bitget rToken 报价兜底**（无需配置）：公开行情 API，stdlib 即可。未装 yfinance 或取数失败时，`invest-cli us` / `intent deep us` 自动回退到 Bitget，输出为 USDT 代币价（`quote_type=rtoken`），**不是**美股交易所官方报价。美股行情降级链：Wind → yfinance → bitget。
+
+### SEC EDGAR（美股财报原文，免费官方源）
+
+无需任何配置（SEC 官方公开 API）。建议设置真实联系方式（SEC 要求 UA 含邮箱，www.sec.gov 域不带邮箱会 403；默认用占位邮箱通过校验）：
+
+```bash
+export SEC_EDGAR_USER_AGENT="your-name your@email"
+invest-cli sec AAPL                  # 终端可读输出
+invest-cli sec AAPL --json           # 结构化（给分析层）
+invest-cli sec MSFT --forms 10-K --filings 3
+```
+
+- 取数：10-K 年报 XBRL 关键指标（营收/净利/营业利润/毛利/经营现金流/总资产/股东权益/EPS）+ 最近申报清单（带 edgar 原文链接）
+- 口径：只取 `form=10-K` + `fp=FY`；时长型事实限 300~400 天（季度值不进）；标签漂移按优先级回退
+- 缓存：`~/Library/Caches/invest-cli/sec/`（ticker 映射 7 天、companyfacts 24h、submissions 6h）
+- 边界：仅美股发行人；20-F（外国私人发行人）与基金 N-CSR 不在覆盖内，会明确报错
+- 定位：与 Wind / yfinance 数字交叉验证的原文级依据；**不经快照链**（`route.pick` 只认 stock/fund/us/screen 方法）
+
+### FRED（宏观时序，可选 key）
+
+```bash
+invest-cli intent macro            # 净流动性三序列（WALCL/TGA/ON RRP）+ SOFR
+```
+
+- 有 `FRED_API_KEY`（环境变量或 `~/.config/invest-cli/fred.env`）：走官方 API
+- 无 key：自动回退 `fredgraph.csv` 免 key 通道（同源同口径，内置 3 次重试）；输出 `transport` 字段标注走了哪条通道
+- 长期使用建议免费注册 key（https://fred.stlouisfed.org/docs/api/api_key.html ，约 2 分钟）
 
 ### 万得 Wind（机构级）
 
@@ -169,8 +208,9 @@ invest-cli 只暴露两处入口，Agent 不直接管理 37 个业务包：
 
 ```bash
 invest-cli datasources              # 查看各数据源是否可用
+invest-cli sec AAPL                 # SEC 财报原文（免费，无需配置）
 invest-cli wind stock_data get_stock_price_indicators --input '{"windcode":"600519.SH"}'
 invest-cli yingmi GetCurrentTime
 ```
 
-数据来源于万得 Wind 金融数据服务 / 盈米且慢 / 同花顺金融数据服务 / 东方财富 / Yahoo Finance / Bitget rToken。
+数据来源于万得 Wind 金融数据服务 / 盈米且慢 / 同花顺金融数据服务 / 东方财富 / Yahoo Finance / SEC EDGAR / Bitget rToken。

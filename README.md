@@ -32,12 +32,19 @@ npx skills add taxueseek/fund-investment-guide
 
 | 你配置了 | 启用的能力 |
 |:---------|:-----------|
-| 东方财富 `EASTMONEY_APIKEY` | `invest-cli`：A股/港股快照、基金快照、自然语言选股 |
-| Python 包 `yfinance` | `invest-cli us` 美股快照 |
-| 本机天天基金类 CLI（如 `ttfund`，自装） | 净值/重仓等公开基金数据，优先喂给 invest-fund |
-| 检索工具 [argo](https://github.com/taxueseek/argo)（自装） | `invest-cli info` 资讯/舆情、`intent macro` 宏观走财经垂直源，多数免 Key，省结构化源配额 |
+| （什么都不配） | 判断框架 + 公开检索；另有三条免 Key 取数：`invest-cli sec`（SEC 财报原文）、`invest-cli us`（装 yfinance 即可）、`invest-cli intent macro`（FRED 免 Key 通道） |
+| 同花顺金融数据服务 `HITHINK_FINANCE_API_KEY` | `invest-cli stock` / `fund` 的 A 股与公募主路（快、字段全） |
+| 东方财富 `EASTMONEY_APIKEY` | A 股/港股快照、基金快照、自然语言选股；港股必经此路 |
+| Python 包 `yfinance` | `invest-cli us` 美股快照（行情+财务+评级） |
+| 官方 `ttskill`（天天基金，可选） | `fund` 快照的深取补充（同类分位/机构占比/经理在管）；未登录自动跳过 |
+| [argo](https://github.com/taxueseek/argo)（可选） | `invest-cli info` 资讯/舆情、`intent macro` 宏观走财经垂直源，多数免 Key，省结构化源配额 |
 
-**和 argo 的分工**：盈米 / Wind / 东财管「精确数值」，argo 管「检索资讯」——资讯、舆情、宏观背景优先走 argo 省配额，结构化源失败时也由它兜底（结果需核验）。argo 是可选项，没装则自动跳过，不影响其他能力。
+**取数与判断分离**：数据层只负责「把数取回来并标明来源」，判断由 `invest-*` 框架完成。
+**零配置也能跑**：不配任何 Key，仍可用 `sec`（SEC EDGAR 官方）、`us`（yfinance）、`intent macro`（FRED）三条免 Key 通道。
+
+**和 argo 的分工**：盈米 / Wind / 同花顺 / 东财管「精确数值」，argo 管「检索资讯」——资讯、舆情、宏观背景优先走 argo 省配额，结构化源失败时也由它兜底（结果需核验）。argo 是可选项，没装则自动跳过，不影响其他能力。
+
+**引擎名不再由 invest-cli 维护白名单**：argo 自带 250+ 引擎且随版本演进，本地名单必然漂移（曾出现名单里的引擎已不存在 → 用户拿到「0 结果 + ok=true」的静默空答复）。现在引擎名原样透传，传错会明确报错并给出清单命令。
 
 详细步骤与排错见 **[docs/data-sources.md](docs/data-sources.md)**。
 
@@ -89,8 +96,10 @@ npx skills add taxueseek/fund-investment-guide
 | 某只基金 | invest-fund | 懂策略吗？能跑赢吗？成本合理吗？ | 主动基金、ETF、QDII |
 | 可转债/黄金原油/REITs/债券 | invest-asset | 债券：偿付+利差+位置；可转债：条款+债底+溢价；商品：逻辑+位置+波动；REITs：底层+运营+估值 | 债市/大宗/国内外REITs |
 | 整体配置 | invest-allocation | 股债比例合理吗？再平衡了吗？ | 跨资产组合 |
+| 市场温度/流动性 | invest-macro | 钱紧不紧？市场过热吗？ | 全球流动性、美股情绪、加密底部 |
+| 出研报/纪要/日报 | invest-analyst | IC 研报、电话会纪要、一致预期、行业深度、市场日报 | 机构级内容产出 |
 | 拿不准？ | invest-discuss | 让多种投资思维同时审视 | 任何标的 |
-| /cli 分析 | invest-cli | 终端数据获取 + 分析框架 | A股/港股/美股/基金 |
+| `/cli` 分析 | invest-cli | 终端数据获取 + 分析框架 | A股/港股/美股/基金 |
 
 ---
 
@@ -132,7 +141,52 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
-## v2.2 增量（本版）
+## v2.5 增量：性能与判据层修复（本版）
+
+本版不增加功能，只做两件事：**把日常取数的固定开销降下来，把「判据落在错误的层」这类缺陷修掉**。
+
+### 性能：路由改为惰性探测（最大一笔）
+
+旧实现在建链时**一次性探测整条链**，于是每次查 A 股都要为末位兜底的 yfinance 付一次真实 HTTPS 探测，wind 目录探测也白付。现在只做便宜的能力判定，在**即将调用某个源之前**才探测可用性；主源命中就不再碰兜底源。
+
+| 指标（同机、清空缓存后实测） | 修改前 | 修改后 | 幅度 |
+|:---|---:|---:|---:|
+| A 股路由探测段（隔离） | 0.53s | **0.012s** | 约 44x |
+| `stock 600519` 冷路径 | 1.52s | **0.51–0.60s** | 约 2.6x |
+| `fund 110011` 冷路径 | 2.30s | **1.24–1.45s** | 约 1.7x |
+| 查 A 股触发的探测次数 | 4 | **1** | — |
+| 热路径（缓存命中） | 0.11–0.13s | 0.11–0.13s | 不变（已是地板） |
+
+另去掉一处重复请求：hithink 利润表曾为拿年报年份先发一次 `limit=1` 预览，而批里本来就有同端点的 `limit=5`；现在按年报披露规律直接定位财年，猜错再补一次。
+
+### 正确性：四处「判据选错层」
+
+- **中文名被判成美股代码**：Python 里汉字也是 `isalpha()`，`intent deep 茅台` 会去 Yahoo 找「茅台」（实测 3.2s 白付）。判据改为 ASCII 字母。
+- **盈米模糊匹配把股票判成基金**：`GuessFundCode` 是子串式匹配，「中国平安」→「华银平安中国主题灵活配置混合」、「招商银行」→「银叶投资-招商银行-宁海工业园1号」。判据从「盈米返回了东西」改为「返回的基金名与查询确有对应」。
+- **空标的打满整条链**：`stock ""` 实测 3.55s 后拼出三句多源错误；现在在入口拦下，0.05s 给一句中文。
+- **上游 `data.data=null` 抛裸异常**：`screen ""` 曾直接抛 `TypeError` 并打出 traceback。
+
+### 资源：缓存不再无界增长
+
+TTL 只决定「读时是否命中」，不删文件；SEC 的 companyfacts 单文件约 3.7MB，按查过的公司数无界累积。新增 7 天上限与写时清理，本机实测缓存目录 24MB → 11MB。
+
+### 回归守卫
+
+测试从 156 条增至 **171 条**，新增的每条都对应一个真实发生过的行为（含反向对照，防止「修成一律拒绝」）。
+
+## v2.4 增量
+
+- **argo 协作纠偏**：删除本地引擎白名单，改为向 argo 要一次合法引擎清单再校验。旧白名单里有一个早已不存在的引擎，用户拿到的是「0 结果 + ok=true」的静默空答复；同时合法引擎会被静默换成 eastmoney、`--max-results` 未透传。修完净删代码，可用引擎从 20 个变成 argo 全部 250+ 个。
+- **热路径性能**：`fund` 深取（ttskill 两次子进程）此前从不缓存，主快照命中缓存后仍每次重付，**0.985s → 0.104s（9.5x）**；FRED 四条序列由串行改并发并加缓存，`intent macro` **2.380s → 0.076s 热 / 0.889s 冷**。
+- **美股三条失态**：未知代码的「非空但全 None 假成功」、yfinance 库内 TypeError 外泄、原始 HTTP 响应体污染 stderr，全部归一为明确中文错误；类别股 `BRK.B` 按**事实**回退到 `BRK-B`（不按字符串形状改写，避免打断 `VOD.L` 这类交易所后缀）。
+- **缓存原子性**：临时文件名带 pid，消灭「多进程共用同一个 .tmp 互相截断」这一类；自选股从缓存目录迁到用户数据目录（缓存会被系统清理）。
+
+## v2.3 增量
+
+- **消融式维护**：注册链 9/9 对齐（清 3 条死链）、死路由清理、命令路径统一（禁止写死个人家目录）、`watchlist` 隐藏能力文档化。
+- **判定原则**：只处理经实验证据证明有价值或损坏的项，删无可证明必要性的复杂度。
+
+## v2.2 增量
 
 - **薄单品种四合一**：invest-bond / invest-convertible / invest-commodity / invest-reit → invest-asset（同一「三关审查」骨架 × 四种资产参数；注册数 12→9）
 - **资产细则下沉**：债券/可转债/商品（含黄金十维度）/REITs 的专属三关、指标表、一票否决、时间定位、输出模板，收敛到 `skills/invest-asset/references/asset-*.md` + `commodity-gold.md`
@@ -188,14 +242,20 @@ npx skills add taxueseek/fund-investment-guide
 
 ### 投资分析 CLI
 
-终端直接获取数据 + 分析框架一体化：
+终端直接取数，输出快照或 JSON（统一入口 `invest-cli`；PATH 无该命令时用 `"$HOME/.local/bin/invest-cli"` 兜底）：
 
 ```bash
-python invest_cli.py stock 600519      # A股/港股实时行情+估值
-python invest_cli.py fund 005827      # 基金净值/业绩/费率/重仓（需东财 Key）
-python invest_cli.py us AAPL         # 美股估值/财务/评级
-python invest_cli.py screen "市盈率低于10的银行股"  # 选股
+invest-cli stock 600519          # A股/港股：行情 + 估值 + 五年财务
+invest-cli fund 110011           # 基金：净值/业绩/回撤/费率/经理/重仓
+invest-cli us AAPL               # 美股：估值 + 财务 + 评级
+invest-cli sec AAPL              # 美股财报原文（SEC EDGAR，免费无 Key）
+invest-cli screen "市盈率低于10的银行股"   # 自然语言选股
+invest-cli intent macro          # 宏观：净流动性三序列（免 Key 通道）
+invest-cli info 茅台             # 资讯/舆情（走 argo）
+invest-cli datasources           # 排查「为什么没数据」：各源可用性与默认快照链
 ```
+
+加 `--json` 输出结构化数据给 Agent 解读；不加则输出终端表格。同一问题不混源，单个源失败整单回退到下一个，并在结果里标明来源。
 
 ---
 
@@ -325,11 +385,14 @@ docs/
 skills/
 ├── invest/                    # 主入口：自动识别标的类型
 ├── invest-stock/              # 个股分析（三关审查/四维评分/机构深度/港A增强）
-├── invest-fund/               # 基金分析（场景路由A/B/C/E/F/G）
+├── invest-fund/               # 基金分析（场景路由）
 ├── invest-asset/              # 单品种资产：债券/可转债/商品（含黄金十维度）/REITs
 ├── invest-allocation/         # 资产配置
+├── invest-macro/              # 宏观与市场环境（流动性/情绪/底部信号）
 ├── invest-discuss/            # 大师会诊（多视角验证）
-└── invest-cli/                # 数据适配CLI（东财/yfinance/ttskill等，配置后启用）
+├── invest-analyst/            # 机构级内容产出（IC 研报/纪要/一致预期/日报）
+└── invest-cli/                # 数据层：CLI + 多源适配器 + 回归测试
+    └── docs/                  # 数据源说明 + 性能与缺陷治理报告（实测数据与复现方式）
 ```
 
 ---
@@ -338,10 +401,13 @@ skills/
 
 | 版本 | 日期 | 变更内容 |
 |:-----|:-----|:---------|
-| v2.2 | 2026-09 | 薄单品种四合一：invest-bond/convertible/commodity/reit → invest-asset（同一三关骨架×四资产参数，注册数 12→9）；invest-cli 退役 cmd_ttfund/ttfund、接入 ttskill 官方源与 hithink/bitget/route 回退链；引用面消毒 |
-| v2.0.5 | 2026-08 | 统一多源数据层（invest-cli 接入 Wind/盈米/东财/yfinance/天天基金 + argo 财经垂直源；intent 意图层收敛接口面、datasources 探测）；新增 invest-bond/invest-macro；黄金十维度并入 invest-commodity；合并 invest-hk-a/us/institutional 进 invest-stock，单一入口降 token |
-| v2.0.2 | 2026-07 | 配置门闩 + 数据源引导（东财/yfinance/可选天天基金）；invest-cli 工程加固；公开路由消毒与死链清理 |
-| v2.0 | 2026-06 | 统一框架升级：invest-stock合并原invest-hk-a/invest-us/invest-institutional，invest-fund新增场景路由，新增invest-discuss/invest-cli，移除invest-report/invest-fund-manager/invest-upgrade/zaoren-invest-roundtable |
+| v2.5 | 2026-09 | 路由惰性探测（A 股探测段 0.53s→0.012s，`stock` 冷路径 1.52s→0.51s）；去重复利润表请求；修四处判据错层（中文名误判美股/盈米误配基金/空标的打满整链/`screen` 裸异常）；缓存 7 天上限自清（本机 24MB→11MB）；回归 156→171 |
+| v2.4 | 2026-09 | argo 引擎清单不再本地维护（可用引擎 20→250+，修静默空答复）；`fund` 深取缓存（0.985s→0.104s）、FRED 并发+缓存（2.380s→0.076s 热）；美股未知代码/类别股/日志污染三类失态修复；缓存原子写（tmp 带 pid）；自选股迁出缓存目录 |
+| v2.3 | 2026-09 | 消融式维护：注册链 9/9 对齐（清 3 条死链）、死路由清理、命令路径统一、`watchlist` 文档化 |
+| v2.2 | 2026-09 | 薄单品种四合一：invest-bond/convertible/commodity/reit → invest-asset（同一三关骨架×四资产参数，注册数 12→9）；invest-cli 退役 `ttfund`、接入 ttskill 官方源与 hithink/bitget/route 回退链；引用面消毒 |
+| v2.0.5 | 2026-08 | 统一多源数据层（invest-cli 接入 Wind/盈米/东财/yfinance/天天基金 + argo 财经垂直源；intent 意图层收敛接口面、datasources 探测）；新增 invest-bond/invest-macro；黄金十维度并入 invest-commodity；合并 invest-hk-a/us/institutional 进 invest-stock |
+| v2.0.2 | 2026-07 | 配置门闩 + 数据源引导（东财/yfinance）；invest-cli 工程加固；公开路由消毒与死链清理 |
+| v2.0 | 2026-06 | 统一框架升级：invest-stock 合并原 invest-hk-a/invest-us/invest-institutional，invest-fund 新增场景路由，新增 invest-discuss/invest-cli，移除 invest-report/invest-fund-manager 等 |
 | v1.0 | 2026-04 | 全面重构，统一三关审查框架，覆盖股基债商+配置+圆桌 |
 
 ---
@@ -388,11 +454,17 @@ Configure sources as needed; **structured fetch enables only after config**:
 
 | You configure | Unlocks |
 |:--------------|:--------|
-| Eastmoney `EASTMONEY_APIKEY` | `invest-cli` stock / fund / screen |
-| Python `yfinance` | `invest-cli us` |
-| Optional local fund CLI (e.g. `ttfund`, user-installed) | Public fund NAV/holdings → feed into invest-fund |
+| (nothing) | Judgment framework + public search; plus three keyless fetch paths: `invest-cli sec` (SEC filings), `invest-cli us` (install yfinance), `invest-cli intent macro` (FRED keyless) |
+| Hithink `HITHINK_FINANCE_API_KEY` | Primary A-share / public-fund snapshot path for `invest-cli stock` / `fund` |
+| Eastmoney `EASTMONEY_APIKEY` | A/HK snapshot, fund snapshot, natural-language screening; required for HK |
+| Python `yfinance` | `invest-cli us` (quote + financials + analyst) |
+| Official `ttskill` (TTFund, optional) | Extra fund fields (peer percentile / institutional ratio / manager AUM); auto-skipped if not logged in |
+| [argo](https://github.com/taxueseek/argo) (optional) | `invest-cli info` news/sentiment, `intent macro` via finance vertical sources; mostly keyless, saves structured quota |
 
-Details: **[docs/data-sources.md](docs/data-sources.md)**. Keep keys on your machine only.
+**Fetch and judgment are separate**: the data layer only retrieves numbers and labels the source; the `invest-*` frameworks make the call.
+**Zero-config still works**: without any key you can still use `sec` (SEC EDGAR), `us` (yfinance) and `intent macro` (FRED).
+
+**Division of labor with argo**: YingMi / Wind / Hithink / Eastmoney handle precise numbers, argo handles retrieval. Engine names are passed through verbatim — invest-cli keeps no local allow-list (it always drifts), so a wrong engine errors out with the command to list valid ones instead of silently returning an empty result.
 
 ---
 
@@ -440,8 +512,10 @@ User Question
 | A specific fund | invest-fund | Understand the strategy? Can beat benchmark? Cost reasonable? | Active funds, ETFs, QDII |
 | Convertible bonds / Gold & Oil / REITs / Bonds | invest-asset | Bonds: solvency+spread+position; Convertibles: terms+floor+premium; Commodities: logic+position+volatility; REITs: assets+operations+valuation | Bond market / Commodities / REITs |
 | Overall allocation | invest-allocation | Stock-bond ratio reasonable? Rebalanced? | Cross-asset portfolio |
+| Market temperature / liquidity | invest-macro | Is money tight? Is the market overheated? | Global liquidity, US sentiment, crypto bottom signals |
+| Research note / minutes / daily | invest-analyst | IC memo, earnings-call minutes, consensus, industry deep-dive, daily report | Institutional-grade output |
 | Not sure? | invest-discuss | Let multiple investment minds examine together | Any target |
-| /cli analysis | invest-cli | Terminal data fetch + analysis framework | A/HK/US stocks, funds |
+| `/cli` analysis | invest-cli | Terminal data fetch + analysis framework | A/HK/US stocks, funds |
 
 ---
 
@@ -522,12 +596,55 @@ Four investment minds examine the same target simultaneously:
 
 ### Investment Analysis CLI
 
+Terminal fetch, table or JSON (`invest-cli` entry point; fall back to `"$HOME/.local/bin/invest-cli"` if not on PATH):
+
 ```bash
-python invest_cli.py stock 600519      # A/HK (requires EASTMONEY_APIKEY)
-python invest_cli.py fund 005827      # Fund snapshot (requires EASTMONEY_APIKEY)
-python invest_cli.py us AAPL         # US (requires yfinance)
-python invest_cli.py screen "Bank stocks with PE below 10"
+invest-cli stock 600519          # A/HK: quote + valuation + 5y financials
+invest-cli fund 110011           # Fund: NAV / returns / drawdown / fees / manager / holdings
+invest-cli us AAPL               # US: valuation + financials + analyst rating
+invest-cli sec AAPL              # US filings, original source (SEC EDGAR, no key)
+invest-cli screen "Bank stocks with PE below 10"
+invest-cli intent macro          # Macro: net-liquidity series (keyless path)
+invest-cli info 茅台             # News / sentiment (via argo)
+invest-cli datasources           # Diagnose "why no data": per-source availability and chains
 ```
+
+Add `--json` for structured output an agent can parse; omit it for a terminal table. One question never mixes sources: a failing source falls back as a whole, and the result always labels its origin.
+
+---
+
+## Recent Improvements & Performance
+
+No new features in v2.5 — just lower fixed cost per call, and fixes for defects where the judgment was made at the wrong layer.
+
+### Performance: lazy source probing (the big one)
+
+The old router probed **every source in the chain up front**, so every A-share query paid a real HTTPS probe for the last-resort yfinance fallback. Now it only does a cheap capability check up front and probes availability right before calling a source; if the primary succeeds, fallbacks are never touched.
+
+| Metric (same machine, cleared cache) | Before | After |
+|:---|---:|---:|
+| A-share routing probe segment (isolated) | 0.53s | **0.012s** (~44x) |
+| `stock 600519` cold path | 1.52s | **0.51–0.60s** (~2.6x) |
+| `fund 110011` cold path | 2.30s | **1.24–1.45s** (~1.7x) |
+| Probes triggered by one A-share query | 4 | **1** |
+| Hot path (cache hit) | 0.11–0.13s | unchanged (already the floor) |
+
+One duplicate request was also removed: the income statement was fetched twice (a `limit=1` preview plus the `limit=5` batch) to learn the latest fiscal year; it is now derived from the annual-report disclosure rule, with a fallback when the guess is wrong.
+
+### Correctness: four cases of "judged at the wrong layer"
+
+- **Chinese names treated as US tickers**: CJK characters are also `isalpha()` in Python, so `intent deep 茅台` went to Yahoo for "茅台" (3.2s wasted). The test is now ASCII-only.
+- **YingMi fuzzy match turning stocks into funds**: `GuessFundCode` is substring-based; "中国平安" matched an unrelated fund. The test changed from "YingMi returned something" to "the returned fund name actually corresponds to the query".
+- **Empty target exhausting the whole chain**: `stock ""` took 3.55s and returned three concatenated source errors; now rejected at the entry in 0.05s with one clear message.
+- **Upstream `data.data=null` raising a bare exception**: `screen ""` used to print a Python traceback.
+
+### Resources: cache no longer grows unbounded
+
+TTL decides read hits, it does not delete files; a single SEC companyfacts file is ~3.7MB and accumulated per company queried. Added a 7-day cap with cleanup on write — measured 24MB → 11MB locally.
+
+### Regression guards
+
+Tests went from 156 to **171**, each new one tied to a behavior that actually happened (including counter-cases so a fix cannot degrade into "reject everything").
 
 ---
 
@@ -560,11 +677,14 @@ docs/
 skills/
 ├── invest/                    # Entry: auto-identifies target type
 ├── invest-stock/              # Stock analysis (3-Gate/4-Dimension/Institutional Deep/HK-A)
-├── invest-fund/               # Fund analysis (Scene routing A/B/C/E/F/G)
-├── invest-asset/               # Single-asset: Bonds/Convertibles/Commodities (incl. gold 10D)/REITs
+├── invest-fund/               # Fund analysis (scene routing)
+├── invest-asset/              # Single-asset: Bonds/Convertibles/Commodities (incl. gold 10D)/REITs
 ├── invest-allocation/         # Asset allocation
+├── invest-macro/              # Macro & market environment (liquidity/sentiment/bottom signals)
 ├── invest-discuss/            # Masters discussion (multi-perspective validation)
-└── invest-cli/                # Data adapter CLI (Eastmoney/yfinance/ttskill; config-gated)
+├── invest-analyst/            # Institutional-grade output (IC memo/minutes/consensus/daily)
+└── invest-cli/                # Data layer: CLI + multi-source adapters + regression tests
+    └── docs/                  # Data-source notes + performance & defect reports (with repro steps)
 ```
 
 ---
@@ -573,8 +693,11 @@ skills/
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
-| v2.2 | 2026-09 | Thin single-asset 4-in-1: invest-bond/convertible/commodity/reit → invest-asset (same 3-gate skeleton × 4 asset params; registry 12→9); invest-cli retired cmd_ttfund/ttfund, adopted ttskill official source + hithink/bitget/route fallback chain; reference cleanup |
-| v2.0.5 | 2026-08 | Unified multi-source data layer (invest-cli: Wind/YingMi/Eastmoney/yfinance/ttfund + argo finance verticals; intent intent-layer convergence; datasources probe); new invest-bond/invest-macro; gold 10-dimension merged into invest-commodity; merged invest-hk-a/us/institutional into invest-stock (single entry, lower token) |
+| v2.5 | 2026-09 | Lazy source probing (A-share probe segment 0.53s→0.012s; `stock` cold 1.52s→0.51s); removed a duplicate income-statement request; four wrong-layer fixes (CJK as US ticker / YingMi fund false positive / empty target exhausting the chain / `screen` bare exception); 7-day cache cap with cleanup (24MB→11MB locally); guards 156→171 |
+| v2.4 | 2026-09 | argo engine list no longer maintained locally (20→250+ usable engines, silent-empty answer fixed); `fund` deep-fetch cache (0.985s→0.104s) and FRED concurrency+cache (2.380s→0.076s hot); three US failure modes fixed (unknown ticker / share classes / log pollution); atomic cache writes (pid in tmp name); watchlist moved out of the cache dir |
+| v2.3 | 2026-09 | Ablation-style maintenance: registration chains 9/9 aligned (3 dead links removed), dead routes cleaned, command paths unified, `watchlist` documented |
+| v2.2 | 2026-09 | Thin single-asset 4-in-1: invest-bond/convertible/commodity/reit → invest-asset (same 3-gate skeleton × 4 asset params; registry 12→9); invest-cli retired `ttfund`, adopted ttskill official source + hithink/bitget/route fallback chain |
+| v2.0.5 | 2026-08 | Unified multi-source data layer (Wind/YingMi/Eastmoney/yfinance + argo finance verticals; intent-layer convergence; datasources probe); new invest-bond/invest-macro; gold 10-dimension merged into invest-commodity |
 | v2.0.2 | 2026-07 | Config gates + data-source guide; invest-cli hardening; public route sanitization |
 | v2.0 | 2026-06 | Unified framework: invest-stock merged HK/US/Institutional, invest-fund scene routing, new invest-discuss/invest-cli |
 | v1.0 | 2026-04 | Initial release, unified 3-gate review framework |

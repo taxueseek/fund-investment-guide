@@ -4,11 +4,21 @@
 输出：净值 + 业绩 + 持仓 + 经理 + 费率（对标 invest-fund 三关框架）
 """
 
-import os
 import sys
 import json
-import requests
+import warnings
 from datetime import datetime
+
+# urllib3 2.x 在 LibreSSL 环境下导入时 emit NotOpenSSLWarning，直接写 stderr。
+# CLI 的 stderr 是错误通道，不该被库噪音占据（agent 解析错误信息会被带偏）。
+# 必须在 import requests **之前**装过滤器，否则告警已在导入期发出。
+#
+# 注意 category 必须写 Warning 而不是 UserWarning：该告警的继承链是
+# NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning，
+# 与 UserWarning 无继承关系，用 UserWarning 或 message 正则都拦不住
+# （实测两者均无效，只有按 Warning + module 才生效）。
+warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
+import requests  # noqa: E402
 
 EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
@@ -75,34 +85,62 @@ def resolve_fund_code(keyword: str) -> str:
     return known.get(keyword, keyword)
 
 
-def fetch_fund_with_fallback(keyword: str) -> dict:
-    """公募基金快照：route.pick 选源，整单回退。ttskill 就绪时深取补充。
+def _ttskill_deep(keyword: str) -> dict | None:
+    """ttskill 深取字段（含可用性门槛与落盘缓存）；任何不满足都返回 None。
 
-    深取是独立子问题（同类分位/机构占比/波动/夏普等 hithink 不提供的字段），
-    只并入主源缺失的键，不覆盖、不跨源拼接同一字段。
-    深取失败静默跳过（快照不受影响）。
+    深取是两次 ttskill 子进程调用（CLI 冷启动 + BASE_INFOS + HOLDING_INFO），
+    实测 ~1.0-1.3s，而它提供的字段（同类分位/机构占比/经理在管）变动远慢于行情。
+    不缓存时，即使主快照命中磁盘缓存，每次 `fund <code>` 仍要重付这一秒。
+    只缓存成功结果：失败若也缓存，一次网络抖动会被放大成持续缺字段。
     """
-    from sources.route import fetch, unwrap_snapshot
+    from _common import CACHE_TTL_FUNDAMENTAL, cache_get, cache_set
     from sources import load_registry
     from sources.registry import detect as detect_conf
 
-    snap = unwrap_snapshot(fetch("fund", keyword))
     conf = load_registry().get("ttskill")
-    if not conf:
-        return snap
-    ok, _detail = detect_conf(conf)
-    if not ok:
-        return snap
+    if not conf or not detect_conf(conf)[0]:
+        return None
+    ckey = f"ttskill|{keyword}"
+    hit = cache_get("deep", ckey, CACHE_TTL_FUNDAMENTAL)
+    if isinstance(hit, dict) and hit:
+        return hit
     try:
         from sources import ttskill as tts_src
 
         res = tts_src.fund(keyword)
     except Exception:
-        return snap
+        return None
     if not res.get("ok") or not isinstance(res.get("data"), dict):
-        return snap
+        return None
     deep = (res["data"] or {}).get("data") or {}
-    if not deep:
+    if deep:
+        cache_set("deep", ckey, deep)
+    return deep or None
+
+
+def fetch_fund_with_fallback(keyword: str) -> dict:
+    """公募基金快照：route.pick 选源，整单回退。ttskill 就绪时深取补充。
+
+    深取是独立子问题（同类分位/机构占比/波动/夏普等 hithink 不提供的字段），
+    只并入主源缺失的键，不覆盖、不跨源拼接同一字段。深取失败静默跳过。
+
+    主快照与深取是两条互不依赖的网络段，串行等于把两段等待相加
+    （实测快照 ~1.2s + 深取 ~1.3s）；并发提交后总耗时收敛到两者最大值。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sources.route import fetch, unwrap_snapshot
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_snap = pool.submit(lambda: unwrap_snapshot(fetch("fund", keyword)))
+        f_deep = pool.submit(_ttskill_deep, keyword)
+        snap = f_snap.result()
+        try:
+            deep = f_deep.result()
+        except Exception:
+            deep = None
+    if not deep or snap.get("source") == "ttskill":
+        # 快照本身来自 ttskill 时，深取与它同源同字段，无需再并一次
         return snap
     existing = snap.get("data") or {}
     added = [k for k, v in deep.items() if k not in existing and v not in (None, "")]
@@ -117,35 +155,74 @@ def fetch_fund_with_fallback(keyword: str) -> dict:
 
 
 def fetch_fund_data(code: str) -> dict:
-    # 1. 基础信息
-    r1 = query_eastmoney(f"{code}基金基本信息 基金名称 基金类型 成立日期 基金规模 基金管理人")
-    t1 = parse_tables(r1)
+    """基金完整数据（东财）。
 
-    # 2. 净值 + 业绩
-    r2 = query_eastmoney(f"{code}基金最新净值 近1月回报 近3月回报 近6月回报 近1年回报 近3年回报 今年来回报")
-    t2 = parse_tables(r2)
+    六组查询相互独立，串行会让六段 RTT 相加（实测最坏 6× 单次耗时）。
+    并发取数不改变任何字段口径，只是不再叠加等待；
+    单个查询失败时该组记为空表，与串行版本的降级行为完全一致。
+    """
+    from concurrent.futures import ThreadPoolExecutor
 
-    # 3. 风险指标
-    r3 = query_eastmoney(f"{code}基金风险指标 最大回撤 波动率 夏普比率 卡玛比率")
-    t3 = parse_tables(r3)
+    queries = [
+        f"{code}基金基本信息 基金名称 基金类型 成立日期 基金规模 基金管理人",
+        f"{code}基金最新净值 近1月回报 近3月回报 近6月回报 近1年回报 近3年回报 今年来回报",
+        f"{code}基金风险指标 最大回撤 波动率 夏普比率 卡玛比率",
+        f"{code}基金费率 管理费率 托管费率 申购费率",
+        f"{code}基金经理 经理姓名 管理年限 管理基金数量 总管理规模",
+        f"{code}基金最新十大重仓股 重仓股名称 占净值比例",
+    ]
 
-    # 4. 费率
-    r4 = query_eastmoney(f"{code}基金费率 管理费率 托管费率 申购费率")
-    t4 = parse_tables(r4)
+    # 哨兵区分「取数失败」与「成功但无数据」：前者是传输问题，不能据此
+    # 判定标的是否存在（否则某组恰好失败就会把正常基金误报为「未找到」）。
+    _FAILED = object()
 
-    # 5. 经理
-    r5 = query_eastmoney(f"{code}基金经理 经理姓名 管理年限 管理基金数量 总管理规模")
-    t5 = parse_tables(r5)
+    def _one(q: str):
+        """单个查询：成功返回行列表（可能为空），失败返回 _FAILED。"""
+        try:
+            return parse_tables(query_eastmoney(q))
+        except RuntimeError as e:
+            if "EASTMONEY_APIKEY" in str(e):
+                raise  # 配置缺失：必须让调用方看见真实原因
+            return _FAILED
+        except Exception:
+            return _FAILED
 
-    # 6. 重仓
-    r6 = query_eastmoney(f"{code}基金最新十大重仓股 重仓股名称 占净值比例")
-    t6 = parse_tables(r6)
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        r1, r2, r3, r4, r5, r6 = pool.map(_one, queries)
+
+    if all(r is _FAILED for r in (r1, r2, r3, r4, r5, r6)):
+        raise RuntimeError(f"东财取数失败（{code}）：六组查询均未成功，请稍后重试")
+
+    t1 = [] if r1 is _FAILED else r1
+    t2 = [] if r2 is _FAILED else r2
+    t3 = [] if r3 is _FAILED else r3
+    t4 = [] if r4 is _FAILED else r4
+    t5 = [] if r5 is _FAILED else r5
+    t6 = [] if r6 is _FAILED else r6
+    _basic_failed = r1 is _FAILED
 
     basic = t1[0] if t1 else {}
     perf = t2[0] if t2 else {}
     risk = t3[0] if t3 else {}
     fees = t4[0] if t4 else {}
     manager = t5[0] if t5 else {}
+
+    # 一致性校验：与 cmd_stock 同源问题——东财对未知代码会模糊匹配到别的
+    # 基金并正常返回。但只有「基础信息查询**成功且为空**」才能判未找到；
+    # 若该查询本身失败，那是传输问题，不能冒充「基金不存在」。
+    if not basic:
+        if _basic_failed:
+            raise RuntimeError(
+                f"东财取数失败（{code}）：基础信息查询未成功，无法确认标的，请稍后重试"
+            )
+        others = [t for t in (perf, risk, fees, manager, t6) if t]
+        if others:
+            got = others[0].get("entityName", "")
+            raise ValueError(
+                f"未找到基金「{code}」的基础信息"
+                + (f"（东财模糊匹配到 {got}，已丢弃以免误导）" if got else "")
+            )
+        raise ValueError(f"未找到基金「{code}」的数据，请确认代码或名称")
 
     merged = {}
     for d in [basic, perf, risk, fees, manager]:

@@ -6,7 +6,7 @@ description: |
   触发：「/cli」「/投资cli」「invest cli」「终端分析」「命令行分析」
   或：「用cli分析」「终端查一下」「命令行看看」
 
-  命令入口：`invest-cli stock 600519`（PATH 无 invest-cli 时兜底：`python3 "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py" stock 600519`）
+  命令入口：`invest-cli stock 600519`（PATH 无 invest-cli 时兜底：`"$HOME/.local/bin/invest-cli" stock 600519`——wrapper 优先用 skill 自带 venv，含 yfinance）
 ---
 
 ## 完整触发条件（原始 description）
@@ -25,7 +25,7 @@ invest-cli 补充"怎么取"（数据获取），把 CLI 脚本和分析框架�
 - Skill 触发 → 调用 CLI 脚本（`--json`）→ 用 invest 系列框架解读 → 输出完整分析报告
 - 终端直接运行 → 输出表格快照
 
-**入口约定**：优先 `invest-cli` 命令（PATH，wrapper 在 `~/.local/bin/`）；PATH 无该命令时用 `python3 "$HOME/.agents/skills/invest-cli/scripts/invest_cli.py"` 兜底。
+**入口约定**：优先 `invest-cli` 命令（PATH，wrapper 在 `~/.local/bin/`）；PATH 无该命令时用 `"$HOME/.local/bin/invest-cli"` 兜底。不要绕过 wrapper 直接 `python3` 裸跑系统解释器——那样会丢掉 venv 里的 yfinance，美股路径静默降级到 Bitget rToken 报价。
 
 ## 路由逻辑
 
@@ -39,7 +39,7 @@ invest-cli 补充"怎么取"（数据获取），把 CLI 脚本和分析框架�
 ### stock — A股/港股分析
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py stock <代码/名称> [--json]
+invest-cli stock <代码/名称> [--json]
 ```
 
 - 数据源：同花顺金融数据服务优先（A 股官方 REST）；失败或港股回退东方财富
@@ -50,7 +50,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py stock <代码/名称> 
 ### fund — 基金分析
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py fund <代码/名称> [--json]
+invest-cli fund <代码/名称> [--json]
 ```
 
 - 数据源：同花顺金融数据服务优先；失败回退东方财富（intent deep fund 仍先盈米）
@@ -61,36 +61,52 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py fund <代码/名称> [
 ### us — 美股分析
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py us <代码> [--json]
+invest-cli us <代码> [--json]
 ```
 
 - 数据源：yfinance 优先（估值/财务/评级）；缺失或失败时回退 Bitget rToken 报价（USDT，非官方价）
 - 获取：全量快照（yfinance）或行情-only（bitget，`quote_type=rtoken`）
 - 分析框架：对标 invest-stock 美股四维度（ROE持续性/负债安全/FCF质量/经济护城河）；Bitget 回退仅有报价，无财务
-### screen — 选股
+
+### sec — 美股财报原文（SEC EDGAR，免费官方源）
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py screen <条件> [--json]
+invest-cli sec <代码> [--forms 10-K,10-Q,8-K] [--filings 5] [--json]
 ```
 
-- 数据源：东方财富选股 API
-- 支持自然语言条件："市盈率低于10的银行股"、"近1年收益>30%的基金"
+- 数据源：SEC EDGAR 官方 XBRL API（companyfacts + submissions），免费无 key
+- 身份声明：SEC 要求 UA 含邮箱（www.sec.gov 强制，否则 403）；默认用占位邮箱通过校验，建议设置 `SEC_EDGAR_USER_AGENT="你的名字 你的邮箱"` 声明真实联系方式
+- 获取：最近年报（10-K，form=10-K + fp=FY）关键指标——营收/净利/营业利润/毛利/经营现金流/总资产/股东权益/EPS；附最近申报清单（带原文链接）
+- 口径：标签漂移按优先级回退（如 Apple 的 Revenues 停在 2018，自动改用 RevenueFromContractWithCustomerExcludingAssessedTax）；时长型事实限 300~400 天，季度值不进结果
+- 定位：与 Wind / yfinance 的结构化数字交叉验证的「原文级」依据；原始 JSON 磁盘缓存 24h（单公司约 3.7MB）
+- 不做：外国私人发行人（20-F）、投资公司（N-CSR）不在覆盖内，会明确报错
+
+### screen — 选股（**股票**筛选）
+
+```bash
+invest-cli screen <条件> [--json]
+```
+
+- 数据源：东方财富**选股** API（stock-screen）——按定义只筛股票
+- 支持自然语言条件："市盈率低于10的银行股"、"ROE大于20%的消费股"
+- 筛**基金**不要用本命令（基金条件会被服务端当成股票的主营业务关键词，结果不是基金）：
+  走 `invest-cli intent screen <条件>`，带「基金/ETF/债基」等词时自动路由到盈米基金搜索
 
 ### watchlist — 本地自选股
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist add <代码> [--name N] [--type fund|stock]
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist remove <代码>
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py watchlist list [--with-quote]
+invest-cli watchlist add <代码> [--name N] [--type fund|stock]
+invest-cli watchlist remove <代码>
+invest-cli watchlist list [--with-quote]
 ```
 
-- 本地存储 `~/.cache/invest-cli/watchlist.json`，不依赖任何外部账户登录态
+- 本地存储 `<state_root>/watchlist.json`（默认 `~/.config/invest-cli/`，可用 `INVEST_CLI_STATE_DIR` 覆盖；用户数据不放缓存目录），不依赖任何外部账户登录态
 - 行情预览走 route.fetch（A 股/基金快照链），按 `--type` 选 stock 或 fund
 
 ### datasources — 数据源探测（统一门闩）
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources [--json]
+invest-cli datasources [--json]
 ```
 
 - 列出所有已登记数据源（配置真源 `data-sources.yaml`）及运行时可用性
@@ -100,7 +116,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py datasources [--json]
 ### wind — 万得 Wind（机构级）
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py wind <server_type> <tool> --input '<json>' [--json]
+invest-cli wind <server_type> <tool> --input '<json>' [--json]
 ```
 
 - 透传 wind-mcp-skill 契约工具（stock_data/fund_data/index_data/...）
@@ -110,7 +126,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py wind <server_type> <to
 ### yingmi — 盈米且慢
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py yingmi <tool> --input '<json>' [--json]
+invest-cli yingmi <tool> --input '<json>' [--json]
 ```
 
 - 透传 `yingmi-skill-cli mcp call` 工具（基金/策略/财富/资讯，共 69 个）
@@ -121,7 +137,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py yingmi <tool> --input 
 ### ttskill — 天天基金官方业务包（透传，37 包可达）
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py ttskill <skill_id> --input '<json>' [--json]
+invest-cli ttskill <skill_id> --input '<json>' [--json]
 ```
 
 - 透传官方 ttskill 业务包（2026-09-03 新增，此前 37 包仅 4 个"声明可达"）
@@ -134,7 +150,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py ttskill <skill_id> --i
 ### capabilities — 能力发现层
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py capabilities [yingmi|ttskill] [--json]
+invest-cli capabilities [yingmi|ttskill] [--json]
 ```
 
 - 取数前先查：官方（盈米 69 工具 / 天天 37 包）有什么、invest-cli 收敛到哪、怎么调——一处可见，根治"不知道有 X 能力"的重复低效
@@ -152,7 +168,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py capabilities [yingmi|t
 ### intent — 意图层（默认取数入口，收敛接口面）
 
 ```bash
-python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py intent <deep/screen/portfolio/plan/macro/present> <参数> [--json]
+invest-cli intent <deep/screen/portfolio/plan/macro/present> <参数> [--json]
 ```
 
 - 把盈米 69 个 MCP 工具 + Wind 7 类收敛为 6 个语义入口，内部按场景 + 标的类型路由到权威源
@@ -189,7 +205,7 @@ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py intent <deep/screen/po
 ### 终端直接运行示例
 
 ```bash
-$ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py stock 600519
+$ invest-cli stock 600519
 ============================================================
   贵州茅台（600519）— 行情快照
 ============================================================
@@ -201,7 +217,7 @@ $ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py stock 600519
   市盈率PE          28.50
   ...
 
-$ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py us AAPL
+$ invest-cli us AAPL
 ============================================================
   Apple Inc.（AAPL）— 美股快照
 ============================================================
@@ -228,11 +244,12 @@ $ python3 ~/.agents/skills/invest-cli/scripts/invest_cli.py us AAPL
 | 同花顺金融数据服务 | `HITHINK_FINANCE_API_KEY` 或用户级 `credentials.env` | stock/fund（A 股与公募，不含港股/美股/自然语言选股） |
 | 东方财富 | `EASTMONEY_APIKEY` | stock/fund/screen |
 | yfinance | `pip3 install yfinance` | us（行情+财务） |
+| SEC EDGAR | 免费无 key（可选 `SEC_EDGAR_USER_AGENT` 声明身份） | us 财报原文（10-K XBRL 指标 + 申报清单，`invest-cli sec` 直取，不经快照链） |
 | Bitget rToken | 始终可用（公开 API） | us（仅行情/USDT） |
 | 万得 Wind | 定位 wind skill + key | stock/fund/index/bond/news/macro |
 | 盈米且慢 | `yingmi-skill-cli init` 完成 | fund/strategy/wealth/news |
 | 天天基金（官方 ttskill，可选深取） | `ttskill` 已登录且装齐业务包（缺省自动跳过） | fund（同类分位/机构占比/在管列表等深取补充） |
-| argo | `argo` skill 目录内含 `scripts/search.py` | news/macro（资讯/舆情/宏观检索；不经快照链，`info`/`intent macro` 直调） |
+| argo | `argo` skill 目录内含 `scripts/search.py` | news/macro（资讯/舆情/宏观检索；不经快照链，`info`/`intent macro` 直调）。引擎名原样透传给 argo（250+ 个，传错即报错、不静默换源）；清单见 argo `search.py --list-engines` |
 
 能力矩阵与详细配置见 `docs/data-sources.md`。取数与降级：单一场景优先最高优先级源，整单失败才降级，禁止跨源合并字段。
 

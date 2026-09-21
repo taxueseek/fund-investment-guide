@@ -10,17 +10,102 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
+
+# yfinance 用标准 logging（logger 名 "yfinance"，propagate=True、无自带 handler），
+# 所以它每遇到一次上游错误就把**原始 HTTP 响应体**经 root 的 lastResort handler
+# 打到 stderr。实测未知代码时 stderr 出现整段
+# `HTTP Error 404: {"quoteSummary":...}`，与 invest-cli 自己的错误行混在一起，
+# 而 stderr 是给人和 agent 读的错误通道——真实原因会被这段噪音淹没。
+# 错误本身由下方守卫转成一句可读中文，这里只负责掐掉库的裸输出。
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 _CN_SH = re.compile(r"^60[0135]\d{3}$|^688\d{3}$|^689\d{3}$")
 _CN_SZ = re.compile(r"^00[013]\d{3}$|^30[01]\d{3}$")
 
+# yfinance 在库内把每个端点的 timeout 写死成 30s，且不暴露配置入口
+# （实测 yfinance 1.2.0 data.py 内 9 处 timeout=30，YfData 无任何 timeout 属性）。
+# 结果是「上游不可达」这一最常见故障要付满 30s 才回退。
+# 这里给连接阶段设一个有界预算：超时即快速失败，交给 route 回退到 bitget。
+# 默认 8s（够真实慢网络往返，又在最坏情况下把 31s 压到 ~8s）；
+# 可用 INVEST_CLI_HTTP_TIMEOUT 覆盖，0 或非法值视为不设限。
+_DEFAULT_HTTP_TIMEOUT = 8.0
+
+
+def _http_timeout() -> float:
+    raw = os.environ.get("INVEST_CLI_HTTP_TIMEOUT", "").strip()
+    if not raw:
+        return _DEFAULT_HTTP_TIMEOUT
+    try:
+        val = float(raw)
+    except ValueError:
+        return _DEFAULT_HTTP_TIMEOUT
+    return val if val > 0 else 0.0
+
+
+def _bound_yfinance_timeouts() -> None:
+    """把 yfinance 写死的 30s 端点超时收到有界预算。
+
+    **为什么必须在 curl_cffi 的 CURLOPT 层拦**（此前的实现是无效的，教训记录）：
+    yfinance 1.2.0 里 `from curl_cffi import requests` 并构造
+    `curl_cffi.requests.Session(impersonate=...)`。而
+    `issubclass(curl_cffi.requests.Session, requests.Session)` 是 **False**——
+    给 `requests.Session.request` 打补丁对 yfinance 毫无作用（实测确认）。
+    同时 yfinance 传的是**显式** timeout 字面量，所以「注入默认值」也不会生效。
+
+    正确做法是拦 libcurl 的 setopt。且必须用 **_MS 变体**：curl_cffi 走的是
+    `CurlOpt.TIMEOUT_MS`(155) / `CONNECTTIMEOUT_MS`(156)，单位毫秒；
+    而 `TIMEOUT`(13) / `CONNECTTIMEOUT`(78) 是秒，curl_cffi 并不设置它们。
+    只拦 13/78 等于没拦（实测：请求 30s 超时照旧 30s 才返回）。
+    两个变体都拦、各自按单位取小，才真正生效（实测 30s → 3.00s）。
+
+    全程**尽力而为**：任何一步失败都静默跳过，绝不因此让取数失败。
+    """
+    budget = _http_timeout()
+    if budget <= 0:
+        return
+
+    try:
+        from curl_cffi import Curl  # type: ignore
+        from curl_cffi.const import CurlOpt  # type: ignore
+
+        if getattr(Curl, "_invest_cli_bounded", False):
+            return
+
+        # 毫秒档与秒档分开，避免单位混用（混用会直接抛 TypeError 或被当成巨大值）
+        _ms_opts = (int(CurlOpt.TIMEOUT_MS), int(CurlOpt.CONNECTTIMEOUT_MS))
+        _sec_opts = (int(CurlOpt.TIMEOUT), int(CurlOpt.CONNECTTIMEOUT))
+        _orig_setopt = Curl.setopt
+
+        def _bounded_setopt(self, option, value):  # type: ignore[no-untyped-def]
+            if isinstance(value, (int, float)) and value > 0:
+                if option in _ms_opts:
+                    value = min(int(value), int(budget * 1000))
+                elif option in _sec_opts:
+                    value = min(value, budget)
+            return _orig_setopt(self, option, value)
+
+        Curl.setopt = _bounded_setopt  # type: ignore[assignment]
+        Curl._invest_cli_bounded = True  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 
 def normalize_ticker(symbol: str) -> str:
-    """yfinance 代码规范化：CN A股/港股代码 → 带后缀 ticker；美股原样。"""
+    """yfinance 代码规范化：CN A股/港股代码 → 带后缀 ticker；美股原样。
+
+    刻意**不做**「点号转连字符」这类形状改写：点号在美股语境里既可能是类别股
+    （BRK.B → BRK-B），也可能是交易所后缀（VOD.L 伦敦、VOW3.F 法兰克福），
+    按字符串形状猜一定会误伤一侧（实测：按「纯字母 + 单字母后缀」改写后，
+    `us VOD.L` 从有数据变成报错）。类别股改由**事实**判定，见 `_load_ticker` 的
+    空壳回退：点号形式拿不到任何标识字段时才试连字符形式。
+    """
     t = (symbol or "").strip().upper()
     if re.fullmatch(r"\d{5}", t):
         return f"{int(t):04d}.HK"  # 00700 → 0700.HK
@@ -50,15 +135,105 @@ def normalize_dividend_yield(info: dict[str, Any], price: float | None) -> float
     return raw / 100 if raw >= 1 else raw
 
 
-def fetch_us_data(symbol: str) -> dict:
-    """使用 yfinance 获取全量快照（美股为主，也兜底 A股/港股。失败抛异常；未安装也抛 ImportError）。"""
+# yfinance 对不存在的代码不会抛「未找到」，而是走两条歧路（均实测）：
+#   - `Ticker.info` 返回**非空但无内容**的 dict（实测 {'trailingPegRatio': None}）；
+#   - `Ticker.history` 在库内 _get_ticker_tz 里抛
+#     `TypeError: argument of type 'NoneType' is not a container or iterable`。
+# 前者会让「查不存在的公司」拿到一张全 None 的快照且 ok=true（静默假成功），
+# 后者会把一句 Python 内部报错当成用户可见原因。两种都不该外泄。
+#
+# 判据用「有没有任何一条能标识标的的字段」——不比对名称（易误判），
+# 与 cmd_stock/cmd_fund 的实体守卫同思路：结构自洽才放行。
+#
+# 刻意**不含 symbol / currency**：这两个是请求侧原样回显的（实测 BRK.B 这种
+# 未规范化的写法会得到 `symbol: "BRK.B"` 而其余字段全空）。把它们算作
+# 「有数据」等于让守卫形同虚设。
+_IDENTITY_FIELDS = (
+    "shortName", "longName",
+    "currentPrice", "regularMarketPrice", "previousClose", "marketCap",
+)
+
+
+def _identity_present(info: dict[str, Any]) -> bool:
+    return any(info.get(k) for k in _IDENTITY_FIELDS)
+
+
+def _settle(fut: Any) -> tuple[Any, BaseException | None]:
+    """取 future 结果，异常不外抛：返回 (值, 异常)。
+
+    两路取数各自独立，一路失败不该让另一路的结果被丢弃——
+    丢弃后就无法判断「标的本身不存在」还是「只是这一路传输失败」。
+    """
+    try:
+        return fut.result(), None
+    except Exception as e:  # noqa: BLE001 —— 上游库抛什么都要归一
+        return None, e
+
+
+class _Attempt(NamedTuple):
+    """一次取数尝试的结果。
+
+    `error` 是「传输/库层失败」，与「拿到了 info 但没有标识字段」（标的不存在）
+    是两件事，必须分开传出去才能分开报。用具名元组而不是位置元组：
+    调用方要读的是 `attempt.error`，不是「三元组的中间那个」。
+    """
+
+    info: Any
+    error: BaseException | None
+    hist: Any
+
+
+def _load_ticker(ticker_symbol: str) -> _Attempt:
+    """取 info + 近 1 年历史。
+
+    info 与 history 相互独立，串行会让两段网络等待相加；并发后不再叠加。
+    异常不外抛：调用方要靠「info 异常」还是「info 空壳」来区分传输失败与标的不存在。
+    """
     import yfinance as yf
 
-    ticker = yf.Ticker(normalize_ticker(symbol))
+    ticker = yf.Ticker(ticker_symbol)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_info = pool.submit(lambda: ticker.info)
+        fut_hist = pool.submit(lambda: ticker.history(period="1y"))
+        info, info_err = _settle(fut_info)
+        hist, hist_err = _settle(fut_hist)
+    return _Attempt(info, info_err, None if hist_err is not None else hist)
 
-    info = ticker.info
 
-    hist = ticker.history(period="1y")
+def _resolve_snapshot(symbol: str) -> _Attempt:
+    """取快照；点号形式拿不到标识字段时，按**事实**回退连字符形式（类别股）。
+
+    类别股（BRK.B / BF.B）Yahoo 只认连字符写法，点号形式返回空壳。但不能按
+    字符串形状改写：点号也可能是交易所后缀（VOD.L 伦敦、VOW3.F 法兰克福），
+    按形状猜必然误伤一侧（实测打断过 `us VOD.L`）。判据只能是「上游给没给数据」。
+
+    首次尝试的错误优先保留：用户问的是他给的那个代码，报错就该报那个。
+    """
+    primary = normalize_ticker(symbol)
+    attempt = _load_ticker(primary)
+    if _identity_present(attempt.info or {}) or "." not in primary:
+        return attempt
+    alt = _load_ticker(primary.replace(".", "-"))
+    return alt if _identity_present(alt.info or {}) else attempt
+
+
+def fetch_us_data(symbol: str) -> dict:
+    """使用 yfinance 获取全量快照（美股为主，也兜底 A股/港股。失败抛异常；未安装也抛 ImportError）。"""
+    _bound_yfinance_timeouts()
+
+    attempt = _resolve_snapshot(symbol)
+
+    # 「取数失败」与「标的不存在」必须分开报（与 cmd_stock/cmd_fund 同一条纪律）：
+    # info 抛异常 = 传输/库层问题，不能据此断言标的不存在；
+    # info 正常返回但没有标识字段 = 上游确实没有这个标的。
+    if attempt.error is not None:
+        raise RuntimeError(
+            f"yfinance 取数失败（{symbol}）：{type(attempt.error).__name__}: {attempt.error}"
+        )
+    info = attempt.info
+    hist = attempt.hist
+    if not isinstance(info, dict) or not _identity_present(info):
+        raise ValueError(f"未找到标的「{symbol}」（Yahoo 无该代码的行情）")
 
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     change_pct = info.get("regularMarketChangePercent")

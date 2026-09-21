@@ -51,6 +51,19 @@ def test_hithink_registered() -> None:
     assert set(reg["hithink"]["coverage"]) == {"stock", "fund"}
 
 
+def test_sec_edgar_registered() -> None:
+    """SEC EDGAR：免费官方源，coverage 为语义标签（不进快照链），经 `invest-cli sec` 直取。"""
+    reg = load_registry()
+    assert "sec_edgar" in reg
+    assert reg["sec_edgar"]["priority"] == 45
+    assert "us_fundamentals" in reg["sec_edgar"]["coverage"]
+    assert reg["sec_edgar"]["adapters"] == ["sec_edgar"]
+    from sources.sec_edgar import detect
+
+    ok, _detail = detect()
+    assert ok is True
+
+
 def test_ttskill_registered() -> None:
     reg = load_registry()
     assert "ttskill" in reg
@@ -112,6 +125,7 @@ if __name__ == "__main__":
     test_screen_columns()
     test_find_cli()
     test_hithink_registered()
+    test_sec_edgar_registered()
     test_ttskill_registered()
     test_ttskill_common_run_guard()
     test_ttskill_code_pass_through()

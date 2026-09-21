@@ -97,6 +97,7 @@ def test_entry_source_table_covers_all_sources() -> None:
         "hithink": "同花顺", "eastmoney": "东方财富", "yfinance": "yfinance",
         "bitget": "Bitget", "wind": "Wind", "yingmi": "盈米",
         "ttskill": "ttskill", "argo": "argo", "fred": "FRED",
+        "sec_edgar": "SEC EDGAR",
     }
     for sid in load_registry():
         assert sid in text or cn_names.get(sid, sid) in text, f"入口数据源表缺 {sid}"

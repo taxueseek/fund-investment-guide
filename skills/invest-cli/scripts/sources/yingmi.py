@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import Any, Optional
+from typing import Optional
 
 CLI = "yingmi-skill-cli"
 CALL_TIMEOUT = 60

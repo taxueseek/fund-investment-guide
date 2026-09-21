@@ -31,11 +31,27 @@ def test_cn_sh_sz() -> None:
 
 def test_us_passthrough() -> None:
     assert normalize_ticker("AAPL") == "AAPL"
-    assert normalize_ticker("brk.b") == "BRK.B"
+    assert normalize_ticker("MSFT") == "MSFT"
+
+
+def test_dotted_symbols_are_not_rewritten_by_shape() -> None:
+    """点号**不得**按字符串形状改写。
+
+    点号在美股语境里既可能是类别股（BRK.B → BRK-B），也可能是交易所后缀
+    （VOD.L 伦敦、VOW3.F 法兰克福）。按「纯字母基名 + 单字母后缀」改写后，
+    `us VOD.L` 从有数据变成报错（实测）。类别股改由空壳回退判定（见
+    test_perf_guards 的 `test_us_class_share_falls_back_to_hyphen`）。
+    """
+    assert normalize_ticker("BRK.B") == "BRK.B"
+    assert normalize_ticker("VOD.L") == "VOD.L"
+    assert normalize_ticker("VOW3.F") == "VOW3.F"
+    assert normalize_ticker("0700.HK") == "0700.HK"
+    assert normalize_ticker("600519.SS") == "600519.SS"
 
 
 if __name__ == "__main__":
     test_hk_five_digit()
     test_cn_sh_sz()
     test_us_passthrough()
+    test_dotted_symbols_are_not_rewritten_by_shape()
     print("test_ticker_norm: OK")

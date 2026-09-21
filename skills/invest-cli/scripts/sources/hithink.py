@@ -416,6 +416,17 @@ def build_history(
     return [_history_row(y, inc.get(y, {}), bal.get(y, {}), cf.get(y, {})) for y in years[:5]]
 
 
+def _guess_annual_year(now: Optional[datetime] = None) -> int:
+    """猜「最新已披露年报」的财年，用于直接问财务指标，省掉一次预览请求。
+
+    A 股年报法定 4/30 前披露完毕：5 月起上一年度年报已出（year-1）；
+    1-4 月按再上一年度算（year-2，早披露的靠调用方的 fallback 补）。
+    猜错不会丢能力：指标为空且实际年份不同时补一次精确请求。
+    """
+    now = now or datetime.now()
+    return now.year - 1 if now.month >= 5 else now.year - 2
+
+
 def _fee(rate_info: Any, rate_type: str) -> Optional[str]:
     if not isinstance(rate_info, list):
         return None
@@ -451,21 +462,35 @@ def stock(
     thscode = picked["thscode"]
     warnings: list[str] = []
 
+    # ① 并发批：6 个独立 GET 一次发完。
+    #    indicators 需要「最近年报年份」。旧实现先用一次 limit=1 预览拿年份，
+    #    再把它并入并发批——但预览与批里的 limit=5 利润表是**同一个端点**，
+    #    等于为同一份数据付两次请求。这里改用「年报披露规律」直接猜财年
+    #    （5 月起上一年度年报已披露完毕），把 indicators 直接放进批里；
+    #    猜错时由下面的 fallback 用批里拿到的真实年份补一次。
+    guess_year = _guess_annual_year()
+
+    jobs = [
+        ("snap", "/api/a-share/prices/snapshot", {"thscodes": thscode}),
+        ("val", "/api/a-share/valuations/snapshot", {"thscodes": thscode}),
+        ("inc", "/api/a-share/financials/income-statements",
+         {"thscode": thscode, "period": "annual", "limit": 5}),
+        ("bal", "/api/a-share/financials/balance-sheets",
+         {"thscode": thscode, "period": "annual", "limit": 5}),
+        ("cf", "/api/a-share/financials/cash-flow-statements",
+         {"thscode": thscode, "period": "annual", "limit": 5}),
+        ("ind", "/api/a-share/financials/indicators",
+         {"thscode": thscode, "report": f"{guess_year}-4"}),
+    ]
+
     got = _request_many(
-        [
-            ("snap", "/api/a-share/prices/snapshot", {"thscodes": thscode}),
-            ("val", "/api/a-share/valuations/snapshot", {"thscodes": thscode}),
-            ("inc", "/api/a-share/financials/income-statements",
-             {"thscode": thscode, "period": "annual", "limit": 5}),
-            ("bal", "/api/a-share/financials/balance-sheets",
-             {"thscode": thscode, "period": "annual", "limit": 5}),
-            ("cf", "/api/a-share/financials/cash-flow-statements",
-             {"thscode": thscode, "period": "annual", "limit": 5}),
-        ],
+        jobs,
         api_key=api_key,
         http_get=http_get,
         sleep=sleep,
     )
+    ind_payload, ind_err = got.get("ind", (None, "未请求"))
+
     snap_payload, snap_err = got["snap"]
     if snap_err:
         return _envelope("stock", False, error=f"行情: {snap_err}")
@@ -494,8 +519,17 @@ def stock(
     )
 
     indicators: dict[str, Optional[float]] = {}
-    latest_year = history[0]["fiscal_year"] if history else None
-    if latest_year is not None:
+    # 年报年份以批里的利润表为准（权威），而不是用猜的那个
+    latest_year = history[0].get("fiscal_year") if history else None
+    if not ind_err:
+        data = (ind_payload or {}).get("data") or {}
+        indicators = parse_indicators(data.get("abilities") if isinstance(data, dict) else None)
+    # 注意：parse_indicators 即使无数据也返回「全 None 的完整键集」——那是 truthy，
+    # 所以判据必须是「有没有任何一个指标取到值」，不是 `not indicators`。
+    if (not any(v is not None for v in indicators.values())
+            and latest_year is not None and latest_year != guess_year):
+        # 猜的财年与实际不一致（早披露/非标准财年）：补一次精确请求。
+        # 正常路径（A 股年报 4/30 前披露完毕）不会走到这里。
         ind_payload, ind_err = _request(
             "/api/a-share/financials/indicators",
             {"thscode": thscode, "report": f"{latest_year}-4"},
@@ -503,11 +537,11 @@ def stock(
             http_get=http_get,
             sleep=sleep,
         )
-        if ind_err:
-            warnings.append(f"财务指标: {ind_err}")
-        else:
+        if not ind_err:
             data = (ind_payload or {}).get("data") or {}
             indicators = parse_indicators(data.get("abilities") if isinstance(data, dict) else None)
+    if ind_err:
+        warnings.append(f"财务指标: {ind_err}")
 
     latest = history[0] if history else {}
     last_price = _to_float(quote_row.get("last_price"))

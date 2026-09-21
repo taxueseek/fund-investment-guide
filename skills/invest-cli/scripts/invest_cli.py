@@ -6,6 +6,7 @@ invest-cli — 投资分析 CLI 工具（主入口）
     invest-cli stock <代码/名称>    A股/港股分析（A股同花顺优先，港股东财）
     invest-cli fund <代码/名称>     基金分析（同花顺优先，失败回退东财）
     invest-cli us <代码>            美股分析（yfinance，缺省回退 Bitget rToken 报价）
+    invest-cli sec <代码>           SEC EDGAR 美股财报原文（10-K XBRL 指标 + 最近申报）
     invest-cli screen <条件>        选股（东财）
     invest-cli datasources          列出并探测数据源可用性
     invest-cli wind <server_type> <tool> --input '<json>'  透传万得 Wind
@@ -21,6 +22,7 @@ invest-cli — 投资分析 CLI 工具（主入口）
     invest-cli stock 茅台 --json
     invest-cli fund 110011
     invest-cli us AAPL
+    invest-cli sec AAPL --filings 5
     invest-cli screen "市盈率低于10的银行股"
     invest-cli datasources
     invest-cli wind stock_data get_stock_price_indicators --input '{"windcode":"600519.SH"}'
@@ -32,8 +34,21 @@ invest-cli — 投资分析 CLI 工具（主入口）
 import sys
 import os
 import argparse
+import warnings
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 第三方库在导入期发出的告警（典型：urllib3 2.x 在 LibreSSL 下报
+# NotOpenSSLWarning）会直接写到 stderr，污染正常输出与错误信息——
+# CLI 的 stderr 是给人和 agent 读的错误通道，不该被库噪音占据。
+#
+# category 必须写 **Warning**：该告警继承链为
+#   NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning
+# 与 UserWarning **无继承关系**，用 UserWarning 或 message 正则都拦不住
+# （实测两者均无效，只有 Warning + module 生效）。
+# 这里覆盖所有走本入口的命令；被单独执行的 cmd_*.py 在各自文件里同样装了
+# 这条过滤器（entry point 不止一个，过滤器就得跟着入口走）。
+warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
 
 
 def cmd_stock(args):
@@ -78,71 +93,14 @@ def cmd_us(args):
         print(format_terminal(data))
 
 
-def parse_markdown_table(md: str) -> list[dict]:
-    """解析 markdown 表格为 list[dict]"""
-    lines = [l.strip() for l in md.strip().split("\n") if l.strip()]
-    if len(lines) < 2:
-        return []
-    # 表头
-    headers = [h.strip() for h in lines[0].split("|")[1:-1]]
-    rows = []
-    for line in lines[2:]:  # 跳过表头和分隔线
-        cells = [c.strip() for c in line.split("|")[1:-1]]
-        if len(cells) == len(headers):
-            rows.append(dict(zip(headers, cells)))
-    return rows
+def cmd_sec(args):
+    from cmd_sec import run
+    sys.exit(run(args.ticker, forms=args.forms, limit=args.filings, as_json=args.json))
 
 
 def cmd_screen(args):
-    """选股：走 route.fetch('screen')，与 intent screen / 快照链同一入口。"""
-    from sources.route import fetch
-
-    res = fetch("screen", args.condition)
-    if not res.get("ok"):
-        print(f"错误: {res.get('error')}", file=sys.stderr)
-        sys.exit(1)
-    result = res.get("data") or {}
-
-    if args.json:
-        import json
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-
-    # 终端输出：东财选股返回 markdown 表格文本
-    try:
-        d = result["data"]["data"]
-        partial = d.get("partialResults", "")
-        security_count = d.get("securityCount", 0)
-        total_condition = d.get("totalCondition", "")
-
-        rows = parse_markdown_table(partial)
-
-        if not rows:
-            print("未找到结果，请调整筛选条件")
-            return
-
-        print(f"\n✅ 找到 {security_count} 只符合条件的股票\n")
-        if total_condition:
-            print(f"🔍 筛选条件: {total_condition}\n")
-
-        # 取前 6 列展示（动态列名，不硬编码日期）
-        from _common import pick_screen_columns, strip_paren_suffix
-        all_keys = list(rows[0].keys())
-        keys = pick_screen_columns(all_keys, limit=6)
-        short_names = [strip_paren_suffix(k)[:12] for k in keys]
-
-        print("  " + "  ".join(f"{h:<14}" for h in short_names))
-        print("  " + "-" * (16 * len(keys)))
-
-        for row in rows[:15]:
-            vals = [str(row.get(k, "-"))[:14] for k in keys]
-            print("  " + "  ".join(f"{v:<14}" for v in vals))
-
-        if security_count > 15:
-            print(f"\n  ... 还有 {security_count - 15} 条结果")
-
-    except (KeyError, IndexError) as e:
-        print(f"解析结果失败: {e}")
+    from cmd_screen import run
+    sys.exit(run(args.condition, as_json=args.json))
 
 
 def cmd_datasources(args):
@@ -215,6 +173,13 @@ def main():
     p_us.add_argument("symbol", help="美股代码")
     p_us.add_argument("--json", action="store_true")
 
+    # sec（SEC EDGAR 财报原文，免费官方源）
+    p_sec = subparsers.add_parser("sec", help="SEC EDGAR 美股财报原文（10-K XBRL + 最近申报）")
+    p_sec.add_argument("ticker", help="美股代码，如 AAPL / MSFT / BRK.B")
+    p_sec.add_argument("--forms", default="10-K,10-Q,8-K", help="申报类型过滤（逗号分隔，默认 10-K,10-Q,8-K）")
+    p_sec.add_argument("--filings", type=int, default=5, help="返回最近申报条数（默认 5）")
+    p_sec.add_argument("--json", action="store_true")
+
     # screen
     p_screen = subparsers.add_parser("screen", help="选股")
     p_screen.add_argument("condition", help="选股条件")
@@ -257,7 +222,7 @@ def main():
     # info（财经检索，走 argo）
     p_info = subparsers.add_parser("info", help="财经检索/资讯/舆情（走 argo，省配额）")
     p_info.add_argument("query", help="检索词")
-    p_info.add_argument("--engine", default="eastmoney", help="eastmoney/zhihu/cninfo/cn-web-search")
+    p_info.add_argument("--engine", default="eastmoney", help="argo 引擎名（如 eastmoney/zhihu/cninfo/anysearch；清单见 argo search.py --list-engines）")
     p_info.add_argument("--json", action="store_true")
 
     # watchlist（本地自选股）
@@ -279,6 +244,7 @@ def main():
         "stock": cmd_stock,
         "fund": cmd_fund,
         "us": cmd_us,
+        "sec": cmd_sec,
         "screen": cmd_screen,
         "datasources": cmd_datasources,
         "wind": cmd_wind,

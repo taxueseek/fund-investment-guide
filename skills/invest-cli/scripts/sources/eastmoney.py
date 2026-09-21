@@ -81,6 +81,16 @@ def fund(keyword: str) -> dict:
     return _wrap("fund", snap)
 
 
+# 选股回包体积说明（2026-09-21 实测，**不裁剪**，仅记录）：
+#   同一条件整包 34.3KB（pretty 打印后 58KB），其中
+#     partialResults 2.5KB —— markdown，**只有前 10 行**（pageSize 20 时仍截断）
+#     allResults.result.columns 10.8KB —— 21 列 × 每列约 20 个版式字段（多为 null）
+#     allResults.result.dataList 17.7KB —— **全部 17 行**，键是东财字段码
+# 两者行集不同（10 vs 17），因此不是可安全互删的重复。唯一无损的精简是
+# 去掉 columns 里那些恒为 null/false 的版式字段（约省 8.8KB / 26%），
+# 收益有限而动了原样透传的契约，故本轮不改，只在此留证。
+
+
 def screen(condition: str, page_size: int = 20) -> dict:
     import requests
 
@@ -99,4 +109,9 @@ def screen(condition: str, page_size: int = 20) -> dict:
         resp.raise_for_status()
     except requests.RequestException as e:
         return {"source": "eastmoney", "kind": "screen", "ok": False, "data": None, "error": f"东财选股失败: {e}"}
-    return {"source": "eastmoney", "kind": "screen", "ok": True, "data": resp.json(), "error": None}
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        return {"source": "eastmoney", "kind": "screen", "ok": False, "data": None,
+                "error": f"东财选股返回非 JSON: {e}"}
+    return {"source": "eastmoney", "kind": "screen", "ok": True, "data": payload, "error": None}

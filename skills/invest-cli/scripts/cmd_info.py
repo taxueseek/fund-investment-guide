@@ -1,7 +1,10 @@
 """info 子命令：财经检索 / 资讯 / 舆情（走 argo，低成本、非配额替代）。
 
 用法:
-    invest-cli info <查询词> [--engine eastmoney|zhihu|cninfo] [--json]
+    invest-cli info <查询词> [--engine eastmoney|zhihu|cninfo|...] [--json]
+
+引擎名透传给 argo（250+ 个），不在此维护白名单——传错引擎会明确报错，
+不会静默换成别的引擎。可用清单：argo 的 `scripts/search.py --list-engines`。
 
 用途：
 - invest 的资讯 / 舆情 / 宏观背景取数（替代盈米资讯类工具，节省配额）

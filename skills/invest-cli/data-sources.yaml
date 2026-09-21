@@ -114,12 +114,24 @@ sources:
       files: []
     adapters: [argo]
 
+  sec_edgar:
+    name: SEC EDGAR 美股财报（10-K XBRL 原文 + 申报清单）
+    kind: api
+    # coverage 为语义标签（非快照链 kind）：不暴露 stock/fund/us/screen 方法，
+    # 因此不进 route 快照链；经 `invest-cli sec <ticker>` 直取。
+    coverage: [us_fundamentals, filings]
+    priority: 45
+    detect:
+      type: always
+    adapters: [sec_edgar]
+
   fred:
     name: FRED 宏观时序（净流动性三序列：WALCL/TGA/ON RRP）
     kind: api
     coverage: [macro]
     priority: 25
     env_var: FRED_API_KEY
+    # 有 key 走官方 API；无 key 由适配器 detect() 判定为可用（fredgraph.csv 免 key 回退）
     detect:
       type: env_or_file
       files:

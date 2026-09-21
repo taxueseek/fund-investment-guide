@@ -124,9 +124,10 @@ description: |
 | 同花顺金融数据服务 | A 股/公募快照 | 60 | 是（stock A、fund） |
 | 东方财富 | 行情/基金/选股 | 50 | 是（港股、回退、自然语言选股）；key 配 `~/.config/invest-cli/eastmoney.env`（技能市场申请） |
 | yfinance | 美股 + A股/港股兜底 | 40 | 是（us；stock 链末位兜底，未安装则跳过） |
+| SEC EDGAR | 美股财报原文（10-K XBRL 指标 + 申报清单） | 45 | 否（不经快照链；`invest-cli sec <代码>` 直取，免费无 key） |
 | Bitget rToken | 美股代币价 | 35 | 是（us 回退） |
 | 天天基金（官方 ttskill） | fund 深取（同类分位/机构占比/在管） | 55 | 是（fund，登录就绪时排 hithink 之后）；黄金走 intent deep commodity→TTFUND_GOLD_INFO |
-| FRED 宏观时序 | 净流动性三序列（总资产/TGA/ON RRP）+ SOFR | 25 | 否（`intent macro` 优先，无 key 降级 argo） |
+| FRED 宏观时序 | 净流动性三序列（总资产/TGA/ON RRP）+ SOFR | 25 | 否（`intent macro` 优先；无 key 走 fredgraph.csv 免 key 回退，仍失败降级 argo） |
 | argo | 资讯/舆情/宏观检索 | —（不经快照链） | 否（`intent macro`、`invest-cli info` 直调） |
 
 组合规则：同一问题整单回退、不混字段。行情、诊断、选股、资讯是四个不同问题，才用不同源。运行时链看 `invest-cli datasources` 的「默认快照链」。
@@ -146,11 +147,12 @@ description: |
 | 个股三关快照（A股） | `invest-cli stock <代码>` 或 `intent deep stock` | hithink > eastmoney |
 | 个股三关快照（港股） | 同上 | eastmoney |
 | 美股快照 | `invest-cli us` 或 `intent deep us` | yfinance > bitget |
+| 美股财报原文（10-K 指标 + 申报链接） | `invest-cli sec <代码>` | SEC EDGAR 官方（免费无 key；与 Wind/yfinance 数字交叉验证） |
 | 基金三关快照（净值/费率/重仓/收益） | `invest-cli fund <代码>` | hithink > eastmoney（ttskill 就绪时深取补充） |
 | 基金诊断雷达 | `intent deep fund <代码>` | 盈米 GetFundDiagnosis；失败再走基金快照链 |
 | 债券 | `intent deep bond <代码或名称>` | wind bond_data（get_bond_market_data） |
 | 黄金/商品 | `intent deep commodity` | 官方 TTFUND_GOLD_INFO |
-| 宏观/市场 | `intent macro` | FRED 净流动性（WALCL/TGA/ON RRP + SOFR）；无 key 或失败降级 argo（nbs_stats 等，免配额） |
+| 宏观/市场 | `intent macro` | FRED 净流动性（WALCL/TGA/ON RRP + SOFR；无 key 走免 key CSV 回退）；失败降级 argo（nbs_stats 等，免配额） |
 | HTML 报告阅读 | `intent present <html文件>` | 本地提取正文（终端摘要；PDF 导出用浏览器打印） |
 | 组合诊断/配置 | `intent portfolio <持仓json或自然语言>` | 盈米 |
 | 家庭财务规划 | `intent plan <家庭数据json或自然语言>` | 盈米 |
@@ -182,4 +184,4 @@ description: |
 
 ---
 
-*invest v2.3 | 纯路由 + 统一数据层 + 消融维护(链对齐/死路由/退役文档清理) | 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*
+*invest v2.5 | 纯路由 + 统一数据层 + 消融维护(链对齐/死路由/退役文档清理) | 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*

@@ -14,11 +14,10 @@
 
 from __future__ import annotations
 
-import os
 import yaml  # type: ignore
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 def repo_config_path() -> Path:

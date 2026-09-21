@@ -23,6 +23,7 @@ from sources.hithink import (  # noqa: E402
     pick_ticker,
     stock,
 )
+
 from sources.registry import detect  # noqa: E402
 
 
@@ -135,6 +136,21 @@ def test_stock_hk_no_http() -> None:
     assert "港股" in (res["error"] or "")
 
 
+def test_guess_annual_year_follows_disclosure_rule() -> None:
+    """年报 4/30 前披露完毕：5 月起取 year-1，1-4 月取 year-2。
+
+    这个猜测只是省一次预览请求；猜错由调用方的 fallback 补，不丢能力。
+    """
+    from datetime import datetime
+
+    from sources.hithink import _guess_annual_year
+
+    assert _guess_annual_year(datetime(2026, 9, 21)) == 2025
+    assert _guess_annual_year(datetime(2026, 5, 1)) == 2025
+    assert _guess_annual_year(datetime(2026, 4, 30)) == 2024
+    assert _guess_annual_year(datetime(2026, 1, 1)) == 2024
+
+
 def test_stock_ok_mock() -> None:
     os.environ[ENV_KEY] = "test-key-not-real"
     router = Router(
@@ -196,6 +212,9 @@ def test_stock_ok_mock() -> None:
     assert "test-key-not-real" not in dumped
     assert all("X-api-key" in h for h in router.headers)
     assert any("indicators" in u and "2025-4" in u for u in router.calls)
+    # 利润表不得为拿年报年份被请求两次（预览与批里的 limit=5 是同一端点）
+    income_calls = [u for u in router.calls if "income-statements" in u]
+    assert len(income_calls) == 1, f"利润表被请求了 {len(income_calls)} 次"
     # 不得猜后缀：必须先 search
     assert any("tickers/search" in u for u in router.calls)
     qs = parse_qs(urlparse(router.calls[0]).query)
@@ -281,7 +300,14 @@ def test_fund_subrequest_failure_envelope_false() -> None:
     assert "收益" in (res.get("error") or "") and "429" in (res.get("error") or "")
 
 
-def test_registry_hithink() -> None:
+def test_registry_hithink(monkeypatch, tmp_path) -> None:
+    # 探测结果落盘是跨进程复用的（B1 收益），本用例断言的是**本场景 env 状态**
+    # 下的 detail，必须从干净探测状态起算——否则命中上一次运行的缓存，
+    # detail 反映的是当时的环境而非当时的断言（实测过的假失败形态）。
+    from sources import registry as _registry
+
+    monkeypatch.setenv("INVEST_CLI_CACHE_DIR", str(tmp_path))
+    _registry._PROBE_CACHE.clear()
     reg = load_registry()
     assert "hithink" in reg
     conf = reg["hithink"]
@@ -315,6 +341,52 @@ def test_live_optional() -> None:
     fres = fund("110011")
     assert fres["ok"] is True, fres.get("error")
     assert fres["data"]["thscode"].endswith(".OF") or fres["data"]["thscode"].endswith(".SH")
+
+
+def test_indicators_fallback_when_guessed_year_is_wrong(monkeypatch) -> None:
+    """猜错财年时必须用批里拿到的真实年份补一次，不丢官方指标。
+
+    正常路径（A 股年报 4/30 前披露完毕）不会走到这里；
+    这个分支是「省一次预览请求」这个优化的正确性兼底。
+    """
+    os.environ[ENV_KEY] = "test-key-not-real"
+    from sources import hithink as h
+
+    monkeypatch.setattr(h, "_guess_annual_year", lambda now=None: 2019)
+    router = Router(
+        {
+            "/api/meta/tickers/search": (
+                200,
+                _ok(_item({"thscode": "600519.SH", "ticker": "600519", "name": "贵州茅台", "asset_type": "a-share"})),
+            ),
+            "/api/a-share/prices/snapshot": (
+                200, _ok(_item({"thscode": "600519.SH", "last_price": 1.0})),
+            ),
+            "/api/a-share/valuations/snapshot": (200, _ok(_item({"pe_ttm": 1.0}))),
+            "/api/a-share/financials/income-statements": (
+                200, _ok(_item({"fiscal_year": 2025, "operating_income": 1e11})),
+            ),
+            "/api/a-share/financials/balance-sheets": (200, _ok(_item({"fiscal_year": 2025}))),
+            "/api/a-share/financials/cash-flow-statements": (200, _ok(_item({"fiscal_year": 2025}))),
+        }
+    )
+    reports: list[str] = []
+
+    def fake_get(url, headers=None):
+        path = urlparse(url).path
+        if path == "/api/a-share/financials/indicators":
+            report = parse_qs(urlparse(url).query).get("report", [""])[0]
+            reports.append(report)
+            if report == "2025-4":  # 真实年份才有指标
+                return 200, _ok({"abilities": [
+                    {"indicators": [{"index_id": "index_weighted_avg_roe", "value": "32.5"}]}]})
+            return 200, _ok({"abilities": []})
+        return router.routes[path]
+
+    res = stock("600519", http_get=fake_get, sleep=lambda _t: None)
+    assert res["ok"] is True, res.get("error")
+    assert res["data"]["financials"]["roe"] == 32.5, "猜错财年后未用真实年份补取指标"
+    assert reports == ["2019-4", "2025-4"], f"补取逻辑不对: {reports}"
 
 
 if __name__ == "__main__":

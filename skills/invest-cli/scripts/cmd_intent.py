@@ -74,7 +74,15 @@ def kind_from_code(t: str) -> str | None:
 
 
 def _is_fund_by_yingmi(target: str) -> bool:
-    """用盈米 GuessFundCode 确认是否基金（自动识别用）。失败默认非基金。"""
+    """用盈米 GuessFundCode 确认是否基金（自动识别用）。失败默认非基金。
+
+    盈米是**子串式模糊匹配**：股票简称会被配到「名字里含这几个字」的无关基金。
+    实测：「中国平安」→「华银平安中国主题灵活配置混合」，
+    「招商银行」→「银叶投资-招商银行-宁海工业园1号」。
+    因此判据不能是「盈米返回了东西」，而必须是「返回的基金名与查询确有对应」：
+    查询是基金名前缀（「易方达蓝筹精选」→「易方达蓝筹精选混合」），
+    或者查询占了基金名的大部分（短名不要拿去配长名）。
+    """
     try:
         from sources import yingmi as _ym
         res = _ym.call("GuessFundCode", {"fundNameOrCode": target})
@@ -83,8 +91,15 @@ def _is_fund_by_yingmi(target: str) -> bool:
     if not res.get("ok"):
         return False
     data = res.get("data") or {}
-    # 成功匹配到基金名 → 视为基金
-    return bool(data) and (isinstance(data, dict) and bool(data.get("fundName") or data.get("name")))
+    if not isinstance(data, dict):
+        return False
+    name = str(data.get("fundName") or data.get("name") or "").strip()
+    kw = (target or "").strip()
+    if not name or not kw:
+        return False
+    if name.startswith(kw):
+        return True
+    return kw in name and len(kw) >= 0.6 * len(name)
 
 
 # 英文类型词精确匹配：避免裸类型词被当成美股代码或拿去问盈米
@@ -109,11 +124,16 @@ def classify(target: str) -> str:
         return coded
     if re.fullmatch(r"\d{6}", t):
         return "fund" if _is_fund_by_yingmi(t) else "stock"
-    # 美股字母代码
-    if t.isalpha() and 1 <= len(t) <= 5:
+    # 美股字母代码（必须限 ASCII）：Python 里汉字也是 isalpha()，
+    # 旧写法会把「茅台」「腾讯」这类中文名判成美股代码，
+    # `intent deep 茅台` 于是去 Yahoo 找「茅台」，白付两轮失败网络。
+    if t.isascii() and t.isalpha() and 1 <= len(t) <= 5:
         return "us"
-    # 名称兜底：用盈米确认是否为基金（多数基金名不含「基金」二字）
-    if _is_fund_by_yingmi(t):
+    # 名称兜底：用盈米确认是否为基金（多数基金名不含「基金」二字）。
+    # 但**短名（≤2 字）不做模糊匹配**：盈米的名称猜测是子串式的，
+    # 「腾讯」会命中「银河定投宝腾讯济安指数」而被判成基金，
+    # 而 2 字输入里股票/港股简称远多于基金简称（实测误配代价高于收益）。
+    if len(t) >= 3 and _is_fund_by_yingmi(t):
         return "fund"
     return "stock"
 
@@ -145,8 +165,14 @@ def _dispatch(scene: str, value: str) -> dict:
     if scene == "deep":
         parts = value.split(" ", 1)
         if len(parts) != 2:
-            # 无显式类型 → 自动识别
+            # 无显式类型 → 自动识别；但「只有类型词没有标的」是缺参数，
+            # 不能把它当成标的（旧写法会把 `deep stock` 当成美股代码 STOCK）。
             target = parts[0].strip()
+            # commodity/gold 的取数是固定场景（TTFUND_GOLD_INFO），本就不需要标的；
+            # 其余类型词没有标的就是缺参数，不能把它当成标的（旧写法会把
+            # `deep stock` 当成美股代码 STOCK）。
+            if target.lower() in ("stock", "fund", "us", "bond"):
+                return {"error": f"deep 缺少标的（用法: intent deep <type> <标的>）"}
             typ = classify(target)
         else:
             typ, target = parts[0], parts[1].strip()

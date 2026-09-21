@@ -32,4 +32,6 @@ def _fetch(kind: str, symbol: str) -> dict:
     try:
         return {"source": "yfinance", "kind": kind, "ok": True, "data": fetch_us_data(symbol.upper()), "error": None}
     except Exception as e:
-        return {"source": "yfinance", "kind": kind, "ok": False, "data": None, "error": f"yfinance 取数失败: {e}"}
+        # 不加「yfinance 取数失败:」前缀：route 层已按 sid 标注来源，
+        # 再拼一次会得到「yfinance: yfinance 取数失败: ...」的双重标签。
+        return {"source": "yfinance", "kind": kind, "ok": False, "data": None, "error": str(e)}

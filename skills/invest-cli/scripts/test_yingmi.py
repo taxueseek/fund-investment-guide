@@ -8,7 +8,6 @@ GetPopularFund 等批量/列表工具直返 JSON 数组（[{...}]）被误判
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 from sources import yingmi
 

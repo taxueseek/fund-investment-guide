@@ -220,8 +220,15 @@ def fund(keyword: str) -> dict[str, Any]:
     """fund 数据源入口：route.fetch 整单调用，失败抛异常由 route 回退。"""
     try:
         code, name = resolve_fcode(keyword)
-        d = _base_snapshot(code)
-        holdings, report_date, industry = _holding_list(code)
+        # BASE 与 HOLDING 是两条独立的 ttskill 子进程调用（各含一次 CLI 冷启动），
+        # 串行等于把两段等待相加；拿到 code 后两者无依赖，并发提交。
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_base = pool.submit(_base_snapshot, code)
+            f_hold = pool.submit(_holding_list, code)
+            d = f_base.result()
+            holdings, report_date, industry = f_hold.result()
         if not d.get("基金类型"):
             d["基金类型"] = "未知（ttskill 未返回类型）"
         data = {
