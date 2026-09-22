@@ -17,8 +17,14 @@ from datetime import datetime
 # NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning，
 # 与 UserWarning 无继承关系，用 UserWarning 或 message 正则都拦不住
 # （实测两者均无效，只有按 Warning + module 才生效）。
+#
+# 过滤器留在模块层，`import requests` 下沉到 query_eastmoney()：requests 的
+# import 自耗时实测约 70ms（含 urllib3/charset_normalizer/certifi 一整串），
+# 而它只服务东财**兜底**这一条路——快照主路走 route.fetch（同花顺优先），
+# 绝大多数调用根本走不到这里。放在模块顶层等于每次 `invest-cli stock` 都先
+# 白付 70ms。过滤器与 import 的先后关系不受影响：模块导入即装过滤器，
+# 而 requests 的首次导入发生在第一次真正调用 query_eastmoney 时，始终在后。
 warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
-import requests  # noqa: E402
 
 EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
@@ -35,6 +41,8 @@ def get_api_key():
 
 def query_eastmoney(query: str) -> dict:
     """调用东方财富 API，返回原始响应"""
+    import requests  # noqa: PLC0415 —— 见文件头「下沉 import」说明
+
     resp = requests.post(
         EASTMONEY_URL,
         headers={"apikey": get_api_key(), "Content-Type": "application/json"},
@@ -247,6 +255,16 @@ def fetch_stock_data(code: str) -> dict:
 
 
 def format_terminal(data: dict) -> str:
+    # yfinance 兜底载荷是**另一种结构**（英文键 + quote/financial 分组），
+    # 本模块的表格只认同花顺/东财的中文键。旧行为是「名字印出来、六个字段全 `-`、
+    # 财务与年报两个区块整块消失」——JSON 里有数、表格是空壳（实测 A 股无凭据
+    # 走 yfinance 时就是这样）。这里直接把该载荷交给 cmd_us 的渲染器，
+    # 一表多用，而不是在本模块里再抄一份英文键映射（那是第二份实现）。
+    if data.get("source") == "yfinance" and "quote" in data and "data" not in data:
+        from cmd_us import format_terminal as _yf_format
+
+        return _yf_format(data, title="行情快照（yfinance 兜底）")
+
     lines = []
     d = data.get("data", {})
     name = data.get("name") or data.get("code") or "未知标的"
@@ -255,22 +273,39 @@ def format_terminal(data: dict) -> str:
     lines.append(f"  {name} — 行情快照")
     lines.append(f"{'=' * 60}")
 
+    # adapter 已经算出的告警必须在终端出现。实测：东财港股行情缺失时 payload 里
+    # 带着 note「行情缺失（可能停牌/无成交），以下为财务口径数据」，但终端只印出
+    # 一张全 `-` 的表、把解释丢掉——用户看到的是"坏数据"，而真相是"没有这段数据"。
+    note = data.get("note")
+    if note:
+        lines.append(f"\n  提示: {note}")
+
     # 行情
     quote = data.get("quote") or {}
     valuation = data.get("valuation") or {}
+    # 同一概念在各源下的键名不同：同花顺给「收盘价」，东财给「最新价」，
+    # yfinance 走结构化字段。逐个候选取第一个有值的；**命中别名时用别名的名字
+    # 当标签**——把「最新价」印在「收盘价」行上是另一种失真，宁可标签跟着事实走。
     quote_keys = [
-        ("收盘价", "收盘价", quote.get("last")), ("开盘价", "开盘价", quote.get("open")),
-        ("昨收", "昨收", quote.get("prev") or d.get("昨收")),
-        ("市盈率PE(TTM)", "PE(TTM)", valuation.get("pe_ttm")), ("市净率PB", "PB", valuation.get("pb_mrq")),
-        ("总市值", "总市值", None),
+        (("收盘价", "最新价", "现价"), "收盘价", quote.get("last")),
+        (("开盘价",), "开盘价", quote.get("open")),
+        (("昨收", "昨结算", "前收盘"), "昨收", quote.get("prev") or d.get("昨收")),
+        (("市盈率PE(TTM)",), "PE(TTM)", valuation.get("pe_ttm")),
+        (("市净率PB", "市净率"), "PB", valuation.get("pb_mrq")),
+        (("总市值",), "总市值", None),
     ]
     lines.append(f"\n  {'指标':<14} {'数值':>16}")
     lines.append(f"  {'-' * 32}")
-    for api_key, label, structured in quote_keys:
-        val = d.get(api_key)
-        if val in (None, "", "-"):
+    for aliases, label, structured in quote_keys:
+        val, shown = None, label
+        for alias in aliases:
+            hit = d.get(alias)
+            if hit not in (None, "", "-"):
+                val, shown = hit, (label if alias == aliases[0] else alias)
+                break
+        if val is None:
             val = structured
-        lines.append(f"  {label:<14} {str(val if val is not None else '-'):>16}")
+        lines.append(f"  {shown:<14} {str(val if val is not None else '-'):>16}")
 
     # 财务
     fin_keys = [

@@ -3,7 +3,7 @@ name: invest-analyst
 description: |
   全能证券分析师工作台——把零散金融工具串成机构级工作流。覆盖个股IC研报、主题策略、事件驱动（电话会/业绩/政策/并购）、一致预期整合、行业比较、市场日报六大场景。
   触发：「出一份茅台的IC报告」「写一份XX的行业深度」「XX业绩电话会纪要」「怎么看待XX政策/并购」「这个产业链有哪些标的」「分析师一致预期」「今天市场怎么样」「出个日报晨报」「这个投资论点怎么写」。
-  与invest系列区别：invest-stock/fund做「买不买」的判断，invest-analyst做「怎么写/怎么产出」的机构级内容交付。invest-industry做「行业是什么」，invest-analyst做「这个行业怎么投」。
+  与invest系列区别：invest-stock/fund做「买不买」的判断，invest-analyst做「怎么写/怎么产出」的机构级内容交付。行业本身「是什么」走 taxue-industry，invest-analyst 做的是「这个行业怎么投」。
 ---
 
 # invest-analyst：全能分析师工作台

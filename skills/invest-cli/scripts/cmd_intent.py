@@ -35,42 +35,14 @@ ROUTES: dict[str, dict] = {
         "stock": lambda p: ("eastmoney_screen", p, None),
     },
     "macro": {},
-    "portfolio": {"default": lambda p: ("yingmi", "DiagnoseFundPortfolio", {"input": p})},
-    "plan": {"default": lambda p: ("yingmi", "GetAssetAllocationPlan", {"input": p})},
+    "portfolio": {"default": lambda p: ("yingmi", "DiagnoseFundPortfolio", _portfolio_params(p))},
+    "plan": {"default": lambda p: ("yingmi", "GetAssetAllocationPlan", _plan_params(p))},
     "present": {"default": lambda p: ("present_html", p, None)},
 }
 
-# 简单场景 → 盈米工具名（value 整体作为用户输入）。
-_SCENE_TOOLS: dict[str, str] = {
-    "portfolio": "DiagnoseFundPortfolio",
-    "plan": "GetAssetAllocationPlan",
-}
-
-
-# 6 位代码里能靠前缀 MECE 切开的部分：不要为茅台去打盈米 CLI。
-_SH_A = re.compile(r"^(60[0135]|688|689)\d{3}$")
-_CHINEXT = re.compile(r"^30[01]\d{3}$")
-_FUND_6 = re.compile(r"^[15]\d{5}$")
-# 可转债确定性段（盈米 GuessFundCode 实测 2026-09-03：这些段查询全部 400 查无基金）：
-# 113（沪市转债 2012+）、123/127/128（深市转债）。
-# 110/118 段与场外基金号段冲突（110011=易方达优质精选、118001=易方达亚洲精选，
-# 盈米实测命中），保留给 _is_fund_by_yingmi 消歧，不在确定性段。
-_BOND_6 = re.compile(r"^(113|123|127|128)\d{3}$")
-
-
-def kind_from_code(t: str) -> str | None:
-    """纯代码的确定性分类。None = 与基金代码区间重叠，才允许外部消歧。"""
-    if re.fullmatch(r"\d{5}", t):
-        return "stock"
-    if not re.fullmatch(r"\d{6}", t):
-        return None
-    if _SH_A.match(t) or _CHINEXT.match(t):
-        return "stock"
-    if _BOND_6.match(t):
-        return "bond"
-    if _FUND_6.match(t):
-        return "fund"
-    return None
+# 代码域分类的唯一真源在 _common（cmd_stock / cmd_fund 也用同一判据拦
+# 「代码域与子命令不匹配」）。此处只做再导出，避免同一判据出现第二份实现。
+from _common import kind_from_code  # noqa: E402
 
 
 def _is_fund_by_yingmi(target: str) -> bool:
@@ -160,6 +132,60 @@ def _resolve_fund_code(target: str) -> str:
     return t
 
 
+# 持仓简写：110011:50 / 110011=10000 / 110011:50,005827:50。
+# 金额必须带显式分隔符（: ： =）：否则「110011 005827」会被贪心成 code=110011, amount=5827。
+_HOLDING_ITEM = re.compile(
+    r"([0-9]{6}|[A-Za-z][A-Za-z0-9.]{0,9})(?:\s*[:：=]\s*([0-9]+(?:\.[0-9]+)?))?"
+)
+
+
+def _portfolio_params(value: str) -> dict:
+    """自然语言/简写持仓 → DiagnoseFundPortfolio 的 body {fundList:[{fundCode,amount}]}。
+
+    SKILL 文档写明 `intent portfolio <持仓json或自然语言>`，但旧实现把整串当
+    `{"input": ...}` 发出去，服务端固定回 400「基金列表不能为空」——文档承诺的
+    自然语言路径实际不可用。JSON 输入仍由 run() 原样透传（含 fundList 或基金数组）。
+    """
+    t = (value or "").strip()
+    if t.startswith(("{", "[")):
+        return {}  # JSON 由 run() 解析后覆盖
+    fund_list = []
+    for code, amount in _HOLDING_ITEM.findall(t):
+        fund_list.append({"fundCode": code, "amount": float(amount) if amount else 10000.0})
+    if not fund_list:
+        return {}
+    return {"fundList": fund_list}
+
+
+def _num_before_or_after(text: str, keyword: str) -> float | None:
+    """取关键词附近的数字：同时支持「20%回撤」与「回撤 20%」两种语序。"""
+    m = re.search(rf"([0-9]+(?:\.[0-9]+)?)\s*%?\s*{keyword}", text) or \
+        re.search(rf"{keyword}[^0-9]{{0,6}}([0-9]+(?:\.[0-9]+)?)\s*%?", text)
+    return float(m.group(1)) if m else None
+
+
+def _plan_params(value: str) -> dict:
+    """自然语言 → GetAssetAllocationPlan 的三个查询参数（三性至少一项）。
+
+    支持「能承受 20% 回撤 / 5 年 / 预期年化 8%」；百分比换算成小数。
+    数字在关键词前或后都能识别（中文里两种语序都常见）。
+    """
+    t = (value or "").strip()
+    if t.startswith(("{", "[")):
+        return {}
+    params: dict[str, float | str] = {}
+    dd = _num_before_or_after(t, "回撤")
+    if dd is not None:
+        params["expectedDrawdown"] = dd / 100
+    ret = _num_before_or_after(t, "年化")
+    if ret is not None:
+        params["expectedAnnualizedReturnRate"] = ret / 100
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*年", t)
+    if m:
+        params["expectedInvestTime"] = f"{m.group(1)}y"
+    return params
+
+
 def _dispatch(scene: str, value: str) -> dict:
     """按场景 + 标的类型返回 {source:..., call:...}，失败返回 {'error':...}。"""
     if scene == "deep":
@@ -211,7 +237,15 @@ def _fund_with_fallback(target: str) -> dict:
     """deep fund：诊断问盈米（独立问题）；快照问 route（同花顺→东财）。不混字段。"""
     from sources import load_registry
     from sources.registry import detect as detect_conf
-    from sources.route import fetch
+    from sources.route import code_domain_error, fetch
+
+    # 代码域守卫：这条路径**先问盈米**（不经 route.fetch），所以 route 那层
+    # 的守卫拦不到它。实测 `intent deep fund 600519` 会拿到盈米的
+    # `{"ok": true, "message": "未识别到具体基金"}` 并 rc=0。
+    # 用同一份判据（route.code_domain_error），不在这里另写一套。
+    _err = code_domain_error("fund", target)
+    if _err:
+        return {"source": "fund", "kind": "fund", "ok": False, "data": None, "error": _err}
 
     conf = load_registry().get("yingmi")
     if conf:

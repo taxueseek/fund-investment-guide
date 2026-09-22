@@ -12,14 +12,14 @@
 
 | 数据源 | 类型 | 覆盖场景 | 优先级 | 启用条件 |
 | --- | --- | --- | --- | --- |
-| Wind（万得） | CLI | stock / fund / index / bond / news / macro / analytics | 80 | 找到 `wind-mcp-skill`（`WIND_SKILL_DIR` 或 `INVEST_SKILL_ROOTS`）且有 key |
-| 盈米（且慢） | CLI | fund / strategy / wealth / news | 70 | `yingmi-skill-cli init` 完成、`hasApiKey=true` |
+| Wind（万得，直连 MCP） | API | stock / fund / index / bond / news / macro / analytics | 80 | 有 `WIND_API_KEY`（`~/.wind-aifinmarket/config` 或环境变量） |
+| 盈米（且慢，直连 OpenAPI） | API | fund / strategy / wealth / news | 70 | `~/.yingmi-skill-cli/config.json` 有 apiKey |
 | 同花顺金融数据服务 | API | stock / fund（A 股与公募） | 60 | `HITHINK_FINANCE_API_KEY` 或用户级 `credentials.env` |
 | 东方财富 | API | stock / fund / screen | 50 | 设置 `EASTMONEY_APIKEY` |
 | Yahoo Finance（yfinance） | python | us | 40 | 安装 `yfinance` |
 | SEC EDGAR（美股财报原文） | API | us 财报原文（10-K XBRL 指标 + 申报清单） | 45 | 免费无 key（可选 `SEC_EDGAR_USER_AGENT` 声明身份）；`invest-cli sec <代码>` 直取，不经快照链 |
 | Bitget rToken | API | us（仅行情） | 35 | 始终可用（公开 API，无 key，stdlib） |
-| 天天基金（官方 ttskill，可选深取引擎） | CLI | fund（同类分位/机构占比/在管列表深取） | 55 | `ttskill` 已登录且装齐业务包；缺省自动跳过（主路=自带 hithink>eastmoney） |
+| 天天基金（直连 gateway，可选深取引擎） | API | fund（同类分位/机构占比/在管列表深取） | 55 | 官方凭据未过期（Keychain）+ 已装业务包；缺省自动跳过（主路=自带 hithink>eastmoney） |
 
 优先级的含义：同一**问题**有多个数据源可用时，按优先级从高到低选取；高优先级源失败才整单降级。yaml 的 coverage 只是声明；适配器必须暴露 `stock()` / `fund()` / `us()` / `screen()` 才会进入默认快照链。Wind 声明覆盖 stock 但只有 `call()`，因此**不会**出现在 `invest-cli stock` 里。
 
@@ -134,7 +134,24 @@ pip3 install yfinance
 
 启用能力：`invest-cli us`（yfinance 全量快照：估值/财务/评级）。
 
-**Bitget rToken 报价兜底**（无需配置）：公开行情 API，stdlib 即可。未装 yfinance 或取数失败时，`invest-cli us` / `intent deep us` 自动回退到 Bitget，输出为 USDT 代币价（`quote_type=rtoken`），**不是**美股交易所官方报价。美股行情降级链：Wind → yfinance → bitget。
+**Bitget rToken 报价兜底**（无需配置）：公开行情 API，stdlib 即可。未装 yfinance 或取数失败时，`invest-cli us` / `intent deep us` 自动回退到 Bitget，输出为 USDT 代币价（`quote_type=rtoken`），**不是**美股交易所官方报价。美股行情降级链：**yfinance → 腾讯行情 → bitget**（Wind 只走 `invest-cli wind` 透传，不在快照链上，运行时链以 `invest-cli datasources` 的 `_chains` 为准）。
+
+### 腾讯行情（零鉴权，多市场实时行情）
+
+无需任何配置。`qt.gtimg.cn` 公开行情接口，一次请求可带多个标的（逗号分隔），
+覆盖 A股/港股/美股/ETF/可转债/指数。
+
+- **优先场景**：`invest-cli quote <代码...>`（纯行情，实测 6 标的混合 132ms）
+- **兜底场景**：`us` 链的兜底位（yfinance 不可达时 130ms 给出真实美股行情，
+  而 bitget 只有代币成交价、无 PE/PB/ROE/市值）；A股/港股链的末位
+- **能力边界**：**没有基本面**（净利润/ROE/EPS/资产负债率一项都没有），
+  因此不占主位——`stock`/`us` 的主位必须留给带基本面的富源，否则是能力降级
+- **不含基金**：`fund` 链不走腾讯。场外基金号码与沪市可转债共用号段
+  （110011 既是易方达中小盘也是歌华转债），行情接口只覆盖后者，
+  直接查会**返回另一个标的**；适配器对这类输入直接拒绝并指向 `invest-cli fund`
+- **口径注意**：qt 返回的字段下标**按市场不同**（市净率 A股在 [46]、美股在 [51]；
+  换手率 A股在 [38]、港股在 [59]；成交额 A股是万元而港美股是元）。
+  适配器按市场分表并只登记已用独立源核对过的下标，见 `scripts/sources/tencent.py`
 
 ### SEC EDGAR（美股财报原文，免费官方源）
 
@@ -163,42 +180,36 @@ invest-cli intent macro            # 净流动性三序列（WALCL/TGA/ON RRP）
 - 无 key：自动回退 `fredgraph.csv` 免 key 通道（同源同口径，内置 3 次重试）；输出 `transport` 字段标注走了哪条通道
 - 长期使用建议免费注册 key（https://fred.stlouisfed.org/docs/api/api_key.html ，约 2 分钟）
 
-### 万得 Wind（机构级）
+### 万得 Wind（机构级，直连 MCP）
 
-1. 安装 Wind skill 并完成 Key 配置（见 Wind 官方 `skill.md` 流程）。
-2. 让 invest-cli 能定位到它，两种方式任一：
-   - 设置 `WIND_SKILL_DIR` 指向 wind-mcp-skill 目录（skill 装在项目内时推荐）
-   - 或设置 `INVEST_SKILL_ROOTS` 指向包含 `.agents/skills` 的项目根（冒号分隔多个）
+只需要一个 Key，**不需要安装 wind-mcp-skill 的 node CLI**。Key 顺序与官方一致：
 
 ```bash
-export WIND_SKILL_DIR=~/.agents/skills/wind-mcp-skill
-# 或
-export INVEST_SKILL_ROOTS=~/.agents/skills
+export WIND_API_KEY=<你的Key>      # 或写入 ~/.wind-aifinmarket/config
 ```
 
 启用能力：`invest-cli wind <server_type> <tool> --input '<json>'`。
+server_type：stock_data / fund_data / index_data / bond_data / financial_docs / economic_data / analytics_data。
 
-### 盈米且慢（基金/策略/财富/资讯）
+### 盈米且慢（基金/策略/财富/资讯，直连 OpenAPI）
 
-```bash
-yingmi-skill-cli init setup --api-key <apiKey>   # 或手机号验证码流程
-yingmi-skill-cli init status                      # 确认 hasApiKey=true
+只需要 apiKey，**不需要安装 `yingmi-skill-cli`**（仍沿用它的凭据位置）：
+
+```json
+// ~/.yingmi-skill-cli/config.json
+{"apiKey": "<你的apiKey>"}
 ```
 
-启用能力：`invest-cli yingmi <tool> --input '<json>'`。
+启用能力：`invest-cli yingmi <tool> --input '<json>'`。操作清单取官方 docs.json（磁盘缓存 6h），不在本地维护第二份。
 
-### 天天基金（官方 ttskill，已封装）
+### 天天基金（直连 gateway）
 
-老 ttfund CLI 已退役（2026-09-03），其能力被官方 ttskill 业务包取代：
-
-```bash
-ttskill status      # 需登录（token 存 macOS 钥匙串）
-ttskill login --env prod --force    # 扫码（30 天有效）
-```
+**不需要安装 ttskill CLI**：直接调官方 gateway（`POST /openapi/skill/invoke`），认证沿用官方凭据存储（macOS Keychain `com.ttfund.ttskill.base`）与 ed25519 签名（与官方基础包同一套逻辑）。只需完成一次官方登录（用官方基础包或任何写同一 Keychain 的工具）。
 
 invest-cli 只暴露两处入口，Agent 不直接管理 37 个业务包：
 - `invest-cli fund <代码/名称>`：三关快照（SEARCH/BASE_INFOS/HOLDING_INFO；链位 55，登录就绪才参与，主路仍是自带 hithink）
-- `invest-cli intent deep commodity ...`：黄金 → 官方 `TTFUND_GOLD_INFO`
+- `invest-cli intent deep commodity ...`：黄金 → `TTFUND_GOLD_INFO`
+- 其他包透传：`invest-cli ttskill <skill_id> --input '<json>'`（清单 `invest-cli capabilities ttskill`）
 
 字段口径真源：invest-fund `invest-fund/references/data-pipeline.md` + `sources/ttskill.py`。
 

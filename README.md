@@ -32,12 +32,13 @@ npx skills add taxueseek/fund-investment-guide
 
 | 你配置了 | 启用的能力 |
 |:---------|:-----------|
-| （什么都不配） | 判断框架 + 公开检索；另有三条免 Key 取数：`invest-cli sec`（SEC 财报原文）、`invest-cli us`（装 yfinance 即可）、`invest-cli intent macro`（FRED 免 Key 通道） |
+| （什么都不配） | 判断框架 + 公开检索；另有免 Key 取数：`invest-cli quote`（腾讯行情，零鉴权多标的实时行情）、`invest-cli sec`（SEC 财报原文）、`invest-cli us`（装 yfinance 即可）、`invest-cli intent macro`（FRED 免 Key 通道） |
 | 同花顺金融数据服务 `HITHINK_FINANCE_API_KEY` | `invest-cli stock` / `fund` 的 A 股与公募主路（快、字段全） |
 | 东方财富 `EASTMONEY_APIKEY` | A 股/港股快照、基金快照、自然语言选股；港股必经此路 |
 | Python 包 `yfinance` | `invest-cli us` 美股快照（行情+财务+评级） |
 | 官方 `ttskill`（天天基金，可选） | `fund` 快照的深取补充（同类分位/机构占比/经理在管）；未登录自动跳过 |
 | [argo](https://github.com/taxueseek/argo)（可选） | `invest-cli info` 资讯/舆情、`intent macro` 宏观走财经垂直源，多数免 Key，省结构化源配额 |
+| 腾讯微证券 CLI（可选，装好即用） | `invest-cli westock` 长尾能力：筹码/龙虎榜/陆股通/北向/两融/一致预期/ESG/机构评级/产业链/板块估值/可转债条款等 40+ 子命令 |
 
 **取数与判断分离**：数据层只负责「把数取回来并标明来源」，判断由 `invest-*` 框架完成。
 **零配置也能跑**：不配任何 Key，仍可用 `sec`（SEC EDGAR 官方）、`us`（yfinance）、`intent macro`（FRED）三条免 Key 通道。
@@ -141,7 +142,46 @@ npx skills add taxueseek/fund-investment-guide
 
 ---
 
-## v2.5 增量：性能与判据层修复（本版）
+## v2.7 增量（本版）：热路径去白付 + 腾讯源并入
+
+### 先量化「日常怎么用」，再动手
+
+从 216 个真实会话提取 `invest-cli` 取数调用，**80% 的相邻调用间隔 <60s**（落在快照缓存 TTL 内）。所以日常性能等于「缓存命中路径 + 每个标的第一次取数」，冷路径才是少数。这条数据直接否掉了两个原本准备做的优化（把美股快照 TTL 拉长只惠及 4-5 次调用；港股那条 3.5s 只占 0.3% 调用），判定不改。
+
+### 性能：热路径不再白付
+
+快照缓存命中前，旧实现会先把整条候选链算完（YAML 解析 + 一串适配器 import，含 ssl），而缓存键与候选链无关；另有一次纯废的 yfinance 补取。修完后（缓存命中，同机交替各 5 次）：
+
+| 命令（缓存命中） | 修改前 | 修改后 | 幅度 |
+|:---|---:|---:|---:|
+| `fund 110011` | 0.09s | **0.03s** | 3.0x |
+| `stock 600519` | 0.08s | **0.05s** | 1.7x |
+| `us AAPL` | 0.05s | **0.03s** | 1.7x |
+| `intent deep stock 600519` | 0.09s | **0.05s** | 1.8x |
+| 冷路径（各源首次取数） | — | 无可测量变化 | 诚实结论：被上游抖动淹没 |
+
+### 新增：免鉴权多标的行情快路径
+
+腾讯行情（零鉴权）并入数据层，新增 `quote` 命令：一次请求可带任意多个标的，跨 A 股/港股/美股/ETF/可转债。三个市场 **186ms**，对照旧路径同问题串行实测 **7.7s（约 41x）**；6 个标的混合 **189ms**（多标的边际成本≈0）。同时新增 `kline`（K 线，年线按自然年聚合）与 `westock`（腾讯微证券 40+ 子命令透传，补筹码/龙虎榜/北向/两融/一致预期/ESG 等长尾能力）。
+
+腾讯**不进 `stock` / `fund` 主位**：它只有行情、没有基本面（净利润/ROE/EPS/资产负债率一个都没有），进主位就是把 A 股快照从 13 项基本面退化成纯行情，属能力降级。链序是 `us = yfinance > 腾讯 > bitget`、`stock = 同花顺 > 东财 > yfinance > 腾讯`，`fund` / `screen` 不含腾讯。
+
+### 正确性：第四轮修 19 项 + 第五轮移植时不继承 17 类
+
+- **代码域不匹配返回冒牌数据**（最严重）：把别的市场/类别的数据当成目标标的返回。
+- **输入层失败触发跨源猜测**：同一输入可能返回两只不同基金。
+- **可用性判据与凭据加载器漂移**：同花顺 / Wind 被静默移出可用链。
+- **号码重叠时静默返回另一个标的**：问基金 110011，回的是「歌华转债」。
+- **帮助文本 / 限流通告当数据**（退出码还是 0）：`westock macro gdp` 回 35 行帮助。
+- **同一数组下标在不同市场是不同量**：`[47]` A 股是涨停价、港股是股息率，港股换手率因此恒为 0.0。改为按市场分表。
+- **当日 K 冒充年 K**：年线未聚合，改为按自然年合成。
+- 其他：`screen` 把「上游没答」说成「未找到结果」、`us .L` 股息率低估 100 倍、非 UTF-8 环境抛 traceback、Python 3.9 无法导入、`watchlist` 空代码写盘等。
+
+### 回归守卫
+
+测试 **237 → 317**，三个解释器全绿（3.14 / 3.9 / Homebrew 无依赖环境）。
+
+## v2.5 增量：性能与判据层修复
 
 本版不增加功能，只做两件事：**把日常取数的固定开销降下来，把「判据落在错误的层」这类缺陷修掉**。
 
@@ -248,6 +288,9 @@ TTL 只决定「读时是否命中」，不删文件；SEC 的 companyfacts 单�
 invest-cli stock 600519          # A股/港股：行情 + 估值 + 五年财务
 invest-cli fund 110011           # 基金：净值/业绩/回撤/费率/经理/重仓
 invest-cli us AAPL               # 美股：估值 + 财务 + 评级
+invest-cli quote 600519,00700,AAPL   # 免鉴权多标的实时行情（跨 A股/港股/美股/ETF/可转债）
+invest-cli kline 600519 --period day # K 线（腾讯原生快路径，年线按自然年聚合）
+invest-cli westock chip 600519   # 腾讯微证券长尾能力透传（40+ 子命令）
 invest-cli sec AAPL              # 美股财报原文（SEC EDGAR，免费无 Key）
 invest-cli screen "市盈率低于10的银行股"   # 自然语言选股
 invest-cli intent macro          # 宏观：净流动性三序列（免 Key 通道）
@@ -401,6 +444,8 @@ skills/
 
 | 版本 | 日期 | 变更内容 |
 |:-----|:-----|:---------|
+| v2.7 | 2026-09 | 并入腾讯行情（零鉴权）与腾讯微证券 CLI：新增 `quote`（多标的实时行情，三市场 186ms，对照旧路径 7.7s，约 41x）/`kline`/`westock` 三命令；热路径去白付（缓存命中 `fund` 0.09→0.03s、`stock` 0.08→0.05s、`us` 0.05→0.03s）；修 19 项缺陷（代码域冒牌数据/跨源猜测/可用性判据漂移/号码重叠静默串号/限流通告当数据等）；移植时不继承 17 类缺陷；回归 237→317 |
+| v2.6 | 2026-09 | 去外部 CLI 依赖：天天基金/盈米/Wind 三源由 `subprocess → CLI` 改为直连 API（认证沿用官方）；隔离实测 invoke 0.374→0.237s、yingmi 0.458→0.244s、wind 0.591→0.426s；修自然语言持仓/配置路径从未可用、凭据重复读取等；回归 171→192 |
 | v2.5 | 2026-09 | 路由惰性探测（A 股探测段 0.53s→0.012s，`stock` 冷路径 1.52s→0.51s）；去重复利润表请求；修四处判据错层（中文名误判美股/盈米误配基金/空标的打满整链/`screen` 裸异常）；缓存 7 天上限自清（本机 24MB→11MB）；回归 156→171 |
 | v2.4 | 2026-09 | argo 引擎清单不再本地维护（可用引擎 20→250+，修静默空答复）；`fund` 深取缓存（0.985s→0.104s）、FRED 并发+缓存（2.380s→0.076s 热）；美股未知代码/类别股/日志污染三类失态修复；缓存原子写（tmp 带 pid）；自选股迁出缓存目录 |
 | v2.3 | 2026-09 | 消融式维护：注册链 9/9 对齐（清 3 条死链）、死路由清理、命令路径统一、`watchlist` 文档化 |
@@ -454,12 +499,13 @@ Configure sources as needed; **structured fetch enables only after config**:
 
 | You configure | Unlocks |
 |:--------------|:--------|
-| (nothing) | Judgment framework + public search; plus three keyless fetch paths: `invest-cli sec` (SEC filings), `invest-cli us` (install yfinance), `invest-cli intent macro` (FRED keyless) |
+| (nothing) | Judgment framework + public search; plus keyless fetch paths: `invest-cli quote` (Tencent quotes, keyless multi-symbol real-time), `invest-cli sec` (SEC filings), `invest-cli us` (install yfinance), `invest-cli intent macro` (FRED keyless) |
 | Hithink `HITHINK_FINANCE_API_KEY` | Primary A-share / public-fund snapshot path for `invest-cli stock` / `fund` |
 | Eastmoney `EASTMONEY_APIKEY` | A/HK snapshot, fund snapshot, natural-language screening; required for HK |
 | Python `yfinance` | `invest-cli us` (quote + financials + analyst) |
 | Official `ttskill` (TTFund, optional) | Extra fund fields (peer percentile / institutional ratio / manager AUM); auto-skipped if not logged in |
 | [argo](https://github.com/taxueseek/argo) (optional) | `invest-cli info` news/sentiment, `intent macro` via finance vertical sources; mostly keyless, saves structured quota |
+| Tencent WeStock CLI (optional, install-and-go) | `invest-cli westock` long-tail capabilities: chips / dragon-tiger list / Stock Connect / margin / consensus / ESG / analyst ratings / industry chain / sector valuation / convertible-bond terms and 40+ subcommands |
 
 **Fetch and judgment are separate**: the data layer only retrieves numbers and labels the source; the `invest-*` frameworks make the call.
 **Zero-config still works**: without any key you can still use `sec` (SEC EDGAR), `us` (yfinance) and `intent macro` (FRED).
@@ -602,6 +648,9 @@ Terminal fetch, table or JSON (`invest-cli` entry point; fall back to `"$HOME/.l
 invest-cli stock 600519          # A/HK: quote + valuation + 5y financials
 invest-cli fund 110011           # Fund: NAV / returns / drawdown / fees / manager / holdings
 invest-cli us AAPL               # US: valuation + financials + analyst rating
+invest-cli quote 600519,00700,AAPL   # Keyless multi-symbol quotes (A/HK/US/ETF/convertibles)
+invest-cli kline 600519 --period day # K-line (Tencent native fast path, yearly bars aggregated)
+invest-cli westock chip 600519   # Tencent WeStock long-tail passthrough (40+ subcommands)
 invest-cli sec AAPL              # US filings, original source (SEC EDGAR, no key)
 invest-cli screen "Bank stocks with PE below 10"
 invest-cli intent macro          # Macro: net-liquidity series (keyless path)
@@ -614,6 +663,31 @@ Add `--json` for structured output an agent can parse; omit it for a terminal ta
 ---
 
 ## Recent Improvements & Performance
+
+### v2.7: hot-path waste removed + Tencent sources merged
+
+**Measure real usage first.** From 216 real sessions, **80% of consecutive `invest-cli` calls are <60s apart** (inside the 60s snapshot cache TTL). So daily performance = the cache-hit path plus the first fetch per symbol; cold paths are the minority. That killed two planned optimizations (raising the US snapshot TTL would help only 4-5 calls; the 3.5s HK path is 0.3% of calls).
+
+**Hot path no longer pays for nothing.** Before a cache hit, the old code still computed the whole candidate chain (YAML parse + adapter import chain, incl. ssl), even though the cache key does not depend on it; one wasted yfinance fetch was also removed. Cache-hit readings (5 alternating runs):
+
+| Command (cache hit) | Before | After |
+|:---|---:|---:|
+| `fund 110011` | 0.09s | **0.03s** (3.0x) |
+| `stock 600519` | 0.08s | **0.05s** |
+| `us AAPL` | 0.05s | **0.03s** |
+| `intent deep stock 600519` | 0.09s | **0.05s** |
+
+Cold paths: no measurable change (honest result — drowned by upstream jitter).
+
+**New: keyless multi-symbol quote fast path.** Tencent quotes (keyless) merged into the data layer, with a new `quote` command: one request, any number of symbols, across A/HK/US/ETF/convertibles. Three markets in **186ms** vs **7.7s** serial on the old path (**~41x**); 6 mixed symbols in **189ms**. Also new: `kline` (yearly bars aggregated by calendar year) and `westock` (Tencent WeStock 40+ subcommands passthrough).
+
+Tencent does **not** enter the primary `stock`/`fund` slot: it has quotes but no fundamentals (no net income / ROE / EPS / debt ratio), so promoting it would degrade an A-share snapshot from 13 fundamental fields to pure quotes. Chains: `us = yfinance > Tencent > bitget`; `stock = Hithink > Eastmoney > yfinance > Tencent`; `fund`/`screen` exclude Tencent.
+
+**Correctness.** 19 defects fixed (round 4) and 17 classes deliberately not inherited when porting Tencent (round 5): wrong-domain fake data, cross-source guessing on input failure, availability-criteria drift silently dropping Hithink/Wind, number-overlap silently returning a different symbol, help text / rate-limit notices returned as data (exit code 0), one array index meaning different quantities per market (HK turnover stuck at 0.0), daily bars masquerading as yearly bars, and more.
+
+**Guards.** Tests **237 → 317**, green on three interpreters.
+
+### v2.5: lazy source probing
 
 No new features in v2.5 — just lower fixed cost per call, and fixes for defects where the judgment was made at the wrong layer.
 
@@ -693,6 +767,8 @@ skills/
 
 | Version | Date | Changes |
 |:--------|:-----|:--------|
+| v2.7 | 2026-09 | Tencent quotes (keyless) and Tencent WeStock CLI merged: new `quote` (multi-symbol real-time, three markets in 186ms vs 7.7s on the old path, ~41x) / `kline` / `westock` commands; hot-path waste removed (cache hit: `fund` 0.09→0.03s, `stock` 0.08→0.05s, `us` 0.05→0.03s); 19 defects fixed (wrong-domain fake data / cross-source guessing / availability-criteria drift / silent symbol overlap / rate-limit notice as data); 17 classes not inherited when porting; guards 237→317 |
+| v2.6 | 2026-09 | External-CLI dependency removed: TTFund / YingMi / Wind moved from `subprocess → CLI` to direct API calls (same official auth); isolated timings invoke 0.374→0.237s, yingmi 0.458→0.244s, wind 0.591→0.426s; fixed the natural-language portfolio/plan path that never worked; guards 171→192 |
 | v2.5 | 2026-09 | Lazy source probing (A-share probe segment 0.53s→0.012s; `stock` cold 1.52s→0.51s); removed a duplicate income-statement request; four wrong-layer fixes (CJK as US ticker / YingMi fund false positive / empty target exhausting the chain / `screen` bare exception); 7-day cache cap with cleanup (24MB→11MB locally); guards 156→171 |
 | v2.4 | 2026-09 | argo engine list no longer maintained locally (20→250+ usable engines, silent-empty answer fixed); `fund` deep-fetch cache (0.985s→0.104s) and FRED concurrency+cache (2.380s→0.076s hot); three US failure modes fixed (unknown ticker / share classes / log pollution); atomic cache writes (pid in tmp name); watchlist moved out of the cache dir |
 | v2.3 | 2026-09 | Ablation-style maintenance: registration chains 9/9 aligned (3 dead links removed), dead routes cleaned, command paths unified, `watchlist` documented |

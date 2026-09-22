@@ -32,9 +32,11 @@ def test_cmd_modules_exist_and_export_run() -> None:
 
 
 def test_yingmi_array_fix_intact() -> None:
-    """适配器必须认 `[` 开头（数组型工具直返），防修复回退。"""
-    text = (SCRIPTS / "sources" / "yingmi.py").read_text(encoding="utf-8")
-    assert 'startswith(("{", "["))' in text
+    """数组型工具直返必须仍被还原为 ok=True（防修复回退）。"""
+    from sources import yingmi
+
+    res = yingmi._wrap([{"fundCode": "001938"}])
+    assert res["ok"] is True and isinstance(res["data"], list)
 
 
 def test_converged_whitelist_semantics() -> None:

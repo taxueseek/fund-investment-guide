@@ -16,7 +16,7 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 # yfinance 用标准 logging（logger 名 "yfinance"，propagate=True、无自带 handler），
 # 所以它每遇到一次上游错误就把**原始 HTTP 响应体**经 root 的 lastResort handler
@@ -26,8 +26,17 @@ from typing import Any, NamedTuple
 # 错误本身由下方守卫转成一句可读中文，这里只负责掐掉库的裸输出。
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-_CN_SH = re.compile(r"^60[0135]\d{3}$|^688\d{3}$|^689\d{3}$")
-_CN_SZ = re.compile(r"^00[013]\d{3}$|^30[01]\d{3}$")
+# A 股代码 → yfinance 后缀。用**前缀族**判定，不逐个枚举号段。
+#
+# 枚举必然漂移：此前 `^00[013]\d{3}$` 漏了 002 段，`002594`（比亚迪）这类
+# 深市主板代码拿不到 `.SZ` 后缀，yfinance 直接判「未找到标的」——而它是
+# A 股链末位的兜底源，用户看到的是「三个源都没找到」而不是「后缀没加」。
+# 上交所：6 开头（600/601/603/605 主板 + 688/689 科创板）；
+# 深交所：00（主板/原中小板）与 30（创业板）开头。
+# 放宽是安全的：后缀判错与不加后缀的后果相同（上游一律回「未找到」），
+# 而漏判只会让本来能成的查询失败。
+_CN_SH = re.compile(r"^6\d{5}$")
+_CN_SZ = re.compile(r"^(?:00|30)\d{4}$")
 
 # yfinance 在库内把每个端点的 timeout 写死成 30s，且不暴露配置入口
 # （实测 yfinance 1.2.0 data.py 内 9 处 timeout=30，YfData 无任何 timeout 属性）。
@@ -97,6 +106,70 @@ def _bound_yfinance_timeouts() -> None:
         pass
 
 
+def _skip_yf_complementary() -> None:
+    """跳过 yfinance 的 `_fetch_complementary`——它只为一个字段打一次网络请求。
+
+    实测（yfinance 1.7.0 `scrapers/quote.py:831`）：`Ticker.info` 在 `_fetch_info`
+    之后**必然**再调 `_fetch_complementary`，而该方法在 1.x 里的全部内容就是为
+    `trailingPegRatio` 发一次 `ws/fundamentals-timeseries` 请求——yfinance 源码
+    自己的注释都写着 "Very expensive for fetching just one value"。
+
+    逐请求打点实测（本机）：这一次请求是整条 us 路径里**唯一不与任何请求并发**的
+    那段，串在关键路径尾部，单次 0.16s ~ 2.24s（波动全在上游，且它是最后一段，
+    没有可重叠的邻居）。而 invest-cli 从不读这个字段（全仓只出现在一句注释里），
+    所以整段对我们是净损耗。
+
+    替换实现保持原函数的**可观察结果**：同样的幂等标记，同样把
+    `_info["trailingPegRatio"]` 置为 None（正是上游"Yahoo 无该数据"分支的写法），
+    只是不发请求。键集不变，下游（含 yfinance 自身）不会因缺键而 KeyError。
+
+    **尽力而为**：上游没有这个私有方法（未来改名/重构）时静默跳过，退化成现状
+    行为（慢一点，但结果正确），绝不因此让取数失败。
+    设 `INVEST_CLI_YF_FULL_INFO=1` 可显式关掉本优化、恢复上游完整行为。
+
+    判据不止「属性存在」（独立对抗审查指出的缺口）：若上游把**别的东西**搬进这个
+    方法名（签名变了），只判存在会把原实现静默换成我们的空实现——不报错、也不退化。
+    因此要求原实现的必填参数只有 `self` 这一个；签名不符就不打补丁。
+    逃生舱取值大小写无关（`FALSE` 与 `false` 同义），避免 `False` / `FALSE` 语义相反。
+    """
+    raw = os.environ.get("INVEST_CLI_YF_FULL_INFO", "").strip().lower()
+    if raw not in ("", "0", "false", "no", "off"):
+        return
+    try:
+        import inspect
+
+        from yfinance.scrapers.quote import Quote  # type: ignore
+
+        orig = getattr(Quote, "_fetch_complementary", None)
+        if orig is None or getattr(orig, "_invest_cli_skipped", False):
+            return
+        try:
+            required = [
+                p
+                for p in inspect.signature(orig).parameters.values()
+                if p.default is inspect.Parameter.empty
+                and p.kind
+                in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+            ]
+        except (TypeError, ValueError):
+            return  # 签名读不出来就不赌
+        if len(required) != 1:  # 只接受 (self)：上游换了语义就别覆盖
+            return
+
+        def _fetch_complementary(self):  # type: ignore[no-untyped-def]
+            if getattr(self, "_already_fetched_complementary", False):
+                return
+            self._already_fetched_complementary = True
+            info = getattr(self, "_info", None)
+            if isinstance(info, dict):
+                info.setdefault("trailingPegRatio", None)
+
+        _fetch_complementary._invest_cli_skipped = True  # type: ignore[attr-defined]
+        Quote._fetch_complementary = _fetch_complementary  # type: ignore[assignment]
+    except Exception:
+        pass
+
+
 def normalize_ticker(symbol: str) -> str:
     """yfinance 代码规范化：CN A股/港股代码 → 带后缀 ticker；美股原样。
 
@@ -107,6 +180,11 @@ def normalize_ticker(symbol: str) -> str:
     空壳回退：点号形式拿不到任何标识字段时才试连字符形式。
     """
     t = (symbol or "").strip().upper()
+    # 去掉**内部**空格：用户/agent 常把代码读成分隔形式（实测 `us "A A P L"`）。
+    # 不清洗时 yfinance 把它判成「不存在的标的」，而 bitget 那条会自己清洗成
+    # `AAPL` 并成功——于是同一个输入在两条源上结论相反，用户拿到一个 USDT
+    # 代币价（非官方价）而不是真实报价（实测 rc=0）。
+    t = re.sub(r"\s+", "", t)
     if re.fullmatch(r"\d{5}", t):
         return f"{int(t):04d}.HK"  # 00700 → 0700.HK
     if _CN_SH.match(t):
@@ -116,15 +194,30 @@ def normalize_ticker(symbol: str) -> str:
     return t
 
 
-def normalize_dividend_yield(info: dict[str, Any], price: float | None) -> float | None:
+# 以**次单位**报价的货币（yfinance 惯例：小写尾字母表示 1/100 主单位）。
+# GBp=便士、ZAc=南非分、ILA=以色列阿戈拉。
+_MINOR_UNIT_CURRENCIES = frozenset({"GBp", "ZAc", "ILA"})
+
+
+def normalize_dividend_yield(
+    info: dict[str, Any], price: float | None, currency: str = ""
+) -> float | None:
     """把 yfinance 的股息率统一归一为**小数**（0.0032 表示 0.32%）。
 
     yfinance 0.2.x 的 `dividendYield` 是小数，1.x 起改为百分数，单位跨版本变过；
     直接用会让展示层重复放大 100 倍（AAPL 曾显示 33.00%，真实约 0.32%）。
     因此优先用「年化股息 ÷ 现价」重算，仅在原始数据缺失时才回退到 dividendYield。
+
+    但重算必须处理**报价单位错配**：`trailingAnnualDividendRate` 与 `currency`
+    属于主单位（GBP），而 `price` 可能以次单位报价（127.35 GBp）。直接相除会
+    低估 100 倍——实测 `us VOD.L`：currency=GBp、price=127.35、
+    dividendRate≈0.046，旧公式给 0.036%，而同一时刻 yfinance 的
+    `dividendYield` = 3.11（即 3.11%）。对照 `us 7203.T`（JPY，主单位）为 3.14%，正确。
     """
     div_rate = info.get("trailingAnnualDividendRate")
     if div_rate and price:
+        if currency in _MINOR_UNIT_CURRENCIES:
+            div_rate = div_rate * 100  # 主单位股息 → 次单位，与 price 同口径
         return div_rate / price
     raw = info.get("dividendYield")
     if raw is None:
@@ -220,6 +313,7 @@ def _resolve_snapshot(symbol: str) -> _Attempt:
 def fetch_us_data(symbol: str) -> dict:
     """使用 yfinance 获取全量快照（美股为主，也兜底 A股/港股。失败抛异常；未安装也抛 ImportError）。"""
     _bound_yfinance_timeouts()
+    _skip_yf_complementary()
 
     attempt = _resolve_snapshot(symbol)
 
@@ -240,7 +334,7 @@ def fetch_us_data(symbol: str) -> dict:
     pe = info.get("trailingPE") or info.get("forwardPE")
     pb = info.get("priceToBook")
     market_cap = info.get("marketCap")
-    dividend_yield = normalize_dividend_yield(info, price)
+    dividend_yield = normalize_dividend_yield(info, price, info.get("currency", "") or "")
     beta = info.get("beta")
 
     roe = info.get("returnOnEquity")
@@ -344,20 +438,58 @@ def fetch_us_with_fallback(symbol: str) -> dict[str, Any]:
     data = res["data"]
     if res.get("source") == "bitget" or data.get("quote_type") == "rtoken":
         snap = bitget_quote_to_snapshot(data)
+        # route 层的缓存命中标记必须透传：stock/fund 热路径带 cached=True，
+        # us 的 bitget 分支丢了它，agent 会误判「这次是现取的」（接线可验证性破口）
+        if res.get("cached"):
+            snap["cached"] = True
+        if res.get("fallback_from"):
+            snap["fallback_from"] = res["fallback_from"]
         if res.get("fallback_error"):
             snap["fallback_reason"] = res.get("fallback_error")
         return snap
+    if res.get("cached"):
+        # yfinance 成功分支同样透传（审查发现：该分支走 return data，内层快照
+        # 不含信封上的 cached 标记，与 bitget 分支不一致）
+        data["cached"] = True
     return data
 
 
-def format_terminal(data: dict) -> str:
+# 货币符号跟着**载荷里的货币**走，不写死 `$`。
+# 为什么：同一条渲染器既服务 us（USD），也服务「A股/港股落到 yfinance 兜底」的路径
+# （见 format_terminal 的 docstring）。实测 `stock hk00700` 走 yfinance 时，标题下面
+# 一行印「货币: HKD」，分析师那段却印「$664.13」——同一屏自相矛盾，读者会把港币
+# 当成美元（664 HKD ≈ 85 USD，差一个量级的使用判断）。
+# 认不出的币种**报代码不猜符号**：印「664.13 XYZ」读者至少知道它是什么，
+# 而挑一个近似的符号会让错误更难发现。
+_CURRENCY_SYMBOL = {
+    "USD": "$", "HKD": "HK$", "CNY": "¥", "CNH": "¥", "GBP": "£", "EUR": "€",
+    "JPY": "¥", "TWD": "NT$", "KRW": "₩", "SGD": "S$", "AUD": "A$",
+    "CAD": "C$", "INR": "₹", "CHF": "CHF ", "GBp": "",
+}
+
+
+def _money(value: float, currency: Optional[str]) -> str:
+    """金额渲染：已知币种走符号，未知币种带代码，绝不用 `$` 冒充。"""
+    cur = (currency or "").strip()
+    if cur in _CURRENCY_SYMBOL:
+        return f"{_CURRENCY_SYMBOL[cur]}{value:.2f}"
+    if cur:
+        return f"{value:.2f} {cur}"
+    # 载荷连币种都没有（老缓存/上游缺字段）：沿用 yfinance 域的既有默认 USD
+    return f"${value:.2f}"
+
+
+def format_terminal(data: dict, title: str = "美股快照") -> str:
+    """终端渲染。`title` 可覆盖：A 股/港股走 yfinance 兜底时也复用本渲染器
+    （见 cmd_stock.format_terminal），那时的载荷结构相同但市场不同，
+    顶上还印「美股快照」就是新的失真。"""
     source = data.get("source", "yfinance")
     if source == "bitget":
         return _format_bitget(data)
-    return _format_yfinance(data)
+    return _format_yfinance(data, title=title)
 
 
-def _format_yfinance(data: dict) -> str:
+def _format_yfinance(data: dict, title: str = "美股快照") -> str:
     lines = []
     q = data.get("quote", {})
     f = data.get("financial", {})
@@ -367,7 +499,7 @@ def _format_yfinance(data: dict) -> str:
 
     name = data.get("name", data["symbol"])
     lines.append(f"\n{'=' * 60}")
-    lines.append(f"  {name}（{data['symbol']}）— 美股快照")
+    lines.append(f"  {name}（{data.get('symbol', '?')}）— {title}")
     lines.append(f"  货币: {data.get('currency', 'USD')}")
     lines.append(f"{'=' * 60}")
 
@@ -432,7 +564,7 @@ def _format_yfinance(data: dict) -> str:
     if a.get("recommendation"):
         lines.append(f"\n  分析师评级: {a['recommendation']}")
         if a.get("target_price"):
-            lines.append(f"  目标价: ${a['target_price']:.2f}")
+            lines.append(f"  目标价: {_money(a['target_price'], data.get('currency'))}")
         if a.get("analyst_count"):
             lines.append(f"  分析师数量: {a['analyst_count']}")
 
@@ -478,6 +610,11 @@ def _format_bitget(data: dict) -> str:
         if val is None:
             lines.append(f"  {label:<16} {'-':>16}")
         else:
+            # 浮点原样 str() 会把二进制表示尾巴也印出来（实测
+            # 「参考价 339.33500000000004」「24h成交额USDT 4898114971.8661」）。
+            # 大额走千分位（`.6g` 会把它写成 4.89811e+09），其余按 6 位有效数字。
+            if isinstance(val, float):
+                val = f"{val:,.2f}" if abs(val) >= 1e6 else format(val, ".6g")
             lines.append(f"  {label:<16} {str(val):>16}")
 
     lines.append(f"\n  数据时间: {data.get('timestamp', '')}")

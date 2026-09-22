@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""天天基金官方 ttskill 适配器（invest-cli 数据源）。
+"""天天基金数据适配器（invest-cli 数据源，直连 gateway，不依赖 ttskill CLI）。
 
 能力：公募基金结构化快照（默认深取层，对应 invest-fund/references/data-pipeline.md）：
   - 名称/代码解析（TTFUND_SEARCH）
@@ -9,7 +9,11 @@
 约定（与 data-pipeline.md 互为镜像，改映射必须两边同步）：
   - 返回信封对齐 route.fetch：{source, kind, ok, data, error}
   - 快照 schema 对齐 cmd_fund.format_terminal（data 用中文键；holdings 用 stock_name/hold_ratio）
-  - 全部走 ttskill CLI，不手拼 token/cookie；cli_login_required → 抛错让 route 落到 hithink/eastmoney
+
+取数路径：**直连官方 gateway**（POST /openapi/skill/invoke），不再起 ttskill 子进程。
+  - 认证沿用官方凭据存储（macOS Keychain `com.ttfund.ttskill.base`，兼容 auth/*.json 回退），
+    用 ed25519 设备密钥签请求头（与官方基础包同一套认证逻辑，不新造）。
+  - 不再依赖官方 CLI 二进制；只依赖「已登录一次」的凭据。
 
 口径（110011 实测 2026-09-03，勿按旧文档改）：
   - BASE：body.expansion.comprehensive_info.fund_profile_overview.{FTYPE,SHORTNAME,FULLNAME,ENDNAV(元),ESTABDATE,JJGS,JJJL,BENCH}
@@ -20,16 +24,29 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
-import shutil
+import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-SOURCE_LABEL = "天天基金 ttskill"
-CLI = "ttskill"
-INVOKE_TIMEOUT = 45
+SOURCE_LABEL = "天天基金"
+
+# ═══ 官方认证（沿用官方凭据存储，不新造）═══
+GATEWAY = "https://skills-api.tiantianfunds.com/ai-smart-skill-service"
+INVOKE_PATH = "/openapi/skill/invoke"
+KEYCHAIN_SERVICE = "com.ttfund.ttskill.base"
+RUNTIME_HOME = Path.home() / "Library" / "Application Support" / "TTFund" / "ttfund-skills"
+SKILLS_INDEX = RUNTIME_HOME / "skills" / "index.json"
+INVOKE_TIMEOUT = 30
 
 # period_increase.title → 展示标签（110011 实测值反推；Z=近1周不进快照）
 PERIOD_LABELS = {
@@ -42,49 +59,198 @@ RISK_DISPLAY = {  # unique_info[0] 键 → cmd_fund 展示键
 }
 
 
+def _b64url(data: bytes) -> str:
+    return base64.b64encode(data).decode().replace("+", "-").replace("/", "_").rstrip("=")
+
+
+def _keychain_account(record: str, legacy_path: str) -> str:
+    """官方 Keychain 账户名：`<record>:<legacy_path 的 sha256 前 16 位>`。"""
+    return f"{record}:{hashlib.sha256(legacy_path.encode()).hexdigest()[:16]}"
+
+
+# 凭据在进程生命周期内不会变（CLI 每进程只跑一条命令）：缓存一次，避免每次
+# `_invoke` 都重跑 `security find-generic-password`（fund 深取会调 2 次）。
+_CRED_CACHE: dict[str, dict[str, Any] | None] = {}
+
+
+def _read_credential(record: str) -> dict[str, Any] | None:
+    """读官方凭据：macOS Keychain 优先，兼容 auth/*.json 回退。
+
+    只读不回显；任何失败都返回 None（调用方按未登录处理）。
+    注意：record 是内部名（token/deviceKey），Keychain 账户前缀是官方名（token/device-key）。
+    """
+    if record in _CRED_CACHE:
+        return _CRED_CACHE[record]
+    acct_prefix, filename = {
+        "token": ("token", "token.json"),
+        "deviceKey": ("device-key", "device-key.json"),
+    }.get(record, (record, f"{record}.json"))
+    legacy = RUNTIME_HOME / "auth" / filename
+    result: dict[str, Any] | None = None
+    if sys.platform == "darwin":
+        acct = _keychain_account(acct_prefix, str(legacy))
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", acct, "-w"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = json.loads(proc.stdout.strip())
+                if isinstance(data, dict):
+                    result = data
+        except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+            result = None
+    if result is None:
+        try:
+            if legacy.is_file():
+                data = json.loads(legacy.read_text(encoding="utf-8"))
+                result = data if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            result = None
+    _CRED_CACHE[record] = result
+    return result
+
+
+def _jwt_exp(token: str) -> int:
+    """从 JWT 里取 exp（不验签，只读声明）。"""
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return 0
+    text = parts[1].replace("-", "+").replace("_", "/")
+    text += "=" * (4 - len(text) % 4) if len(text) % 4 else ""
+    try:
+        return int(json.loads(base64.b64decode(text)).get("exp", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _token_state() -> tuple[bool, str]:
+    """返回 (是否可用, 说明)。判据是「有 token 且未过期」，不是「文件在磁盘上」。"""
+    token = _read_credential("token")
+    if not token:
+        return False, "未登录天天基金（缺 token 凭据）"
+    if not _read_credential("deviceKey"):
+        return False, "缺少设备密钥凭据（device-key）"
+    access = token.get("access_token") or token.get("accessToken") or ""
+    if not access:
+        return False, "凭据里没有 access_token"
+    exp = _jwt_exp(access) or int(token.get("saved_at", 0) or 0) + int(token.get("expires_in", 0) or 0)
+    if exp and exp <= int(time.time()):
+        return False, f"登录已过期（{time.strftime('%Y-%m-%d', time.gmtime(exp))}）"
+    return True, "已登录"
+
+
 def detect() -> tuple[bool, str]:
-    """登录态探测：token 存在且未过期才算可用（过期时 status 文本仍显示
-    'auth token: present'，仅按文本匹配会误判可用 → 必须看 is_expired）。"""
-    exe = shutil.which(CLI)
-    if not exe:
-        return False, f"{CLI} 不在 PATH"
-    try:
-        proc = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=10)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, f"{CLI} status 失败: {e}"
-    try:
-        st = json.loads(proc.stdout or "{}")
-    except json.JSONDecodeError:
-        return False, f"{CLI} status 非 JSON: {(proc.stdout or '')[:120]}"
-    auth = st.get("auth") or {}
-    if not auth.get("has_token"):
-        return False, "ttskill 未登录，执行 ttskill login"
-    cu = (auth.get("current_user") or {})
-    if cu.get("is_expired") is True:
-        return False, f"ttskill token 已过期（{cu.get('expires_at', '?')}），执行 ttskill login --env prod --force"
-    skills = st.get("skills") or []
-    if not skills:
-        return False, "ttskill 已登录但无业务包，先 ttskill install"
-    return True, f"ttskill 已登录 用户:{cu.get('customer_no_masked', '?')}"
+    """可用性 = 有凭据且未过期，且本机至少装了一个业务包。
+
+    旧实现跑 `ttskill status --json` 子进程（~0.3s/次，且要 CLI 在 PATH）；
+    这里直接读凭据 + 读已装包索引，零子进程。
+    """
+    ok, detail = _token_state()
+    if not ok:
+        return False, detail
+    if not _installed_skills():
+        return False, "已登录但未安装业务包"
+    return True, detail
 
 
-def _invoke(skill_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """ttskill invoke → body 信封。失败抛 RuntimeError。"""
-    exe = shutil.which(CLI)
-    if not exe:
-        raise RuntimeError(f"{CLI} 不在 PATH")
-    proc = subprocess.run(
-        [exe, "invoke", skill_id, "--action", "query", "--body", json.dumps(body, ensure_ascii=False)],
-        capture_output=True, text=True, timeout=INVOKE_TIMEOUT,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"{CLI} invoke {skill_id} 退出码 {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+def _installed_skills() -> dict[str, str]:
+    """已装业务包 {skill_id: version}，取自官方 skills/index.json（不跑 CLI）。"""
     try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"{CLI} invoke {skill_id} 非 JSON 输出: {proc.stdout[:200]}")
-    if not payload.get("code") == 0:
-        raise RuntimeError(f"{CLI} invoke {skill_id} 失败: {str(payload.get('message'))[:200]}")
+        data = json.loads(SKILLS_INDEX.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    # index.json 形状为 {"skills": [...]}（旧版可能是裸数组，两种都收）
+    items = data.get("skills") if isinstance(data, dict) else data
+    out: dict[str, str] = {}
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        sid = item.get("skill_id")
+        if sid and str(item.get("status", "enabled")) != "disabled":
+            out[str(sid)] = str(item.get("version") or "0.0.0")
+    return out
+
+
+def _sign_headers(method: str, path: str, body: bytes, session_id: str, private_key_pem: str) -> dict[str, str]:
+    """ed25519 签名头（与官方基础包同一套认证逻辑）。"""
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex
+    body_sha = hashlib.sha256(body).hexdigest()
+    sign_path = path
+    prefix = "/ai-smart-skill-service"
+    if sign_path.startswith(prefix + "/openapi/"):
+        sign_path = sign_path[len(prefix):]
+    payload = f"{method.upper()}\n{sign_path}\n{body_sha}\n{timestamp}\n{nonce}\n{session_id}".encode()
+    key = load_pem_private_key(private_key_pem.encode(), password=None)
+    return {
+        "X-Session-Id": session_id,
+        "X-Timestamp": timestamp,
+        "X-Nonce": nonce,
+        "X-Body-SHA256": body_sha,
+        "X-Signature": _b64url(key.sign(payload)),
+    }
+
+
+def _invoke(skill_id: str, body: dict[str, Any], action: str = "query") -> dict[str, Any]:
+    """直连 gateway 调业务包 → body 信封。失败抛 RuntimeError。
+
+    与 `ttskill invoke` 等价，但少一次子进程与一次 JSON 往返。
+    版本从本机 index.json 取（官方 CLI 也这么做）；409 时用服务端 latest 重试一次。
+    """
+    token = _read_credential("token")
+    key_info = _read_credential("deviceKey")
+    if not token or not key_info:
+        raise RuntimeError("未登录天天基金（缺凭据），请先完成一次官方登录")
+    access = token.get("access_token") or token.get("accessToken") or ""
+    session_id = token.get("session_id") or token.get("sessionId") or ""
+    if not access or not session_id:
+        raise RuntimeError("登录态无效（缺 access_token/session_id），请重新登录")
+    pem = key_info.get("device_private_key_pem") or ""
+    if not pem:
+        raise RuntimeError("设备密钥凭据损坏（缺 device_private_key_pem），请重新登录")
+    version = _installed_skills().get(skill_id, "0.0.0")
+
+    def _post(ver: str) -> dict[str, Any]:
+        payload = {**body, "skill_id": skill_id, "_skill_version": ver, "action": action}
+        data = json.dumps(payload, ensure_ascii=False).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "X-TTSkill-Env": "prod",
+            "Authorization": f"Bearer {access}",
+            **_sign_headers("POST", INVOKE_PATH, data, session_id, pem),
+        }
+        req = urllib.request.Request(GATEWAY + INVOKE_PATH, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=INVOKE_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    try:
+        payload = _post(version)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        if e.code == 401:
+            raise RuntimeError("天天基金登录已失效，请重新登录") from e
+        if e.code == 409 and "skill_version_required" in err_body:
+            # 本地版本落后于 gateway：用响应里的 latest 重试一次
+            try:
+                meta = json.loads(err_body)
+            except json.JSONDecodeError:
+                meta = {}
+            latest = (meta.get("latest_version") or meta.get("skill_version_required")
+                      or (meta.get("data") or {}).get("latest_version"))
+            if latest and str(latest) != str(version):
+                payload = _post(str(latest))
+            else:
+                raise RuntimeError(f"{skill_id} 业务包版本不匹配：{err_body[:200]}") from e
+        else:
+            raise RuntimeError(f"{skill_id} 调用失败 HTTP {e.code}: {err_body[:200]}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"天天基金 gateway 不可达: {e}") from e
+
+    if payload.get("code") not in (0, None):
+        raise RuntimeError(f"{skill_id} 调用失败: {str(payload.get('message'))[:200]}")
     raw = ((payload.get("data") or {}).get("raw_result") or {}).get("body") or {}
     ec = raw.get("errorCode")
     # 成功码各包不一：BASE/HOLDING 用 0，GOLD 等用 200；以 success=false 或 code∉{0,200} 判失败

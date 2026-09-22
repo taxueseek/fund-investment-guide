@@ -5,9 +5,12 @@ invest-cli — 投资分析 CLI 工具（主入口）
 用法:
     invest-cli stock <代码/名称>    A股/港股分析（A股同花顺优先，港股东财）
     invest-cli fund <代码/名称>     基金分析（同花顺优先，失败回退东财）
-    invest-cli us <代码>            美股分析（yfinance，缺省回退 Bitget rToken 报价）
+    invest-cli us <代码>            美股分析（yfinance，缺省回退腾讯行情/Bitget）
+    invest-cli quote <代码...>      免鉴权实时行情（一次请求多标的、跨市场，130ms 量级）
+    invest-cli kline <代码>         K线（原生 ~130ms；分钟级转 westock CLI）
     invest-cli sec <代码>           SEC EDGAR 美股财报原文（10-K XBRL 指标 + 最近申报）
     invest-cli screen <条件>        选股（东财）
+    invest-cli westock <args...>   透传腾讯微证券 CLI（筹码/龙虎榜/资金流/一致预期/产业链/板块…）
     invest-cli datasources          列出并探测数据源可用性
     invest-cli wind <server_type> <tool> --input '<json>'  透传万得 Wind
     invest-cli yingmi <tool> --input '<json>'              透传盈米且慢
@@ -22,6 +25,9 @@ invest-cli — 投资分析 CLI 工具（主入口）
     invest-cli stock 茅台 --json
     invest-cli fund 110011
     invest-cli us AAPL
+    invest-cli quote 600519,00700,AAPL
+    invest-cli kline 600519 --period month --limit 12
+    invest-cli westock chip 600519
     invest-cli sec AAPL --filings 5
     invest-cli screen "市盈率低于10的银行股"
     invest-cli datasources
@@ -49,6 +55,26 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 这里覆盖所有走本入口的命令；被单独执行的 cmd_*.py 在各自文件里同样装了
 # 这条过滤器（entry point 不止一个，过滤器就得跟着入口走）。
 warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
+
+
+def _relax_output_encoding() -> None:
+    """把 stdout/stderr 的编码错误处理放宽为 replace，避免整条命令崩掉。
+
+    实测：`PYTHONIOENCODING=ascii invest-cli stock 600519` 直接抛
+    `UnicodeEncodeError: 'ascii' codec can't encode characters ...` 并打出完整
+    traceback（在一轮 78 次真实调用里，这是**唯一**一条 traceback）。
+
+    CLI 的输出契约是「中文指标名 + 数值」：环境编码表达不了中文时，正确行为是
+    **降级输出**（不可编码字符替成 `?`）并保持 rc=0，而不是抛异常、丢掉整份数据、
+    把栈帧倒给用户。只在编码确实非 UTF-8 时才动，正常环境零影响。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            enc = (getattr(stream, "encoding", "") or "").lower()
+            if enc and enc.replace("-", "") != "utf8":
+                stream.reconfigure(errors="replace")  # type: ignore[union-attr]
+        except Exception:
+            pass
 
 
 def cmd_stock(args):
@@ -91,6 +117,23 @@ def cmd_us(args):
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         print(format_terminal(data))
+
+
+def cmd_quote(args):
+    from cmd_quote import run
+    sys.exit(run(args.symbols, as_json=args.json))
+
+
+def cmd_kline(args):
+    from cmd_kline import run
+    sys.exit(run(args.code, period=args.period, limit=args.limit, as_json=args.json))
+
+
+def cmd_westock(args):
+    from cmd_westock import run
+    if getattr(args, "ws_help", False):
+        sys.exit(run(["--help"], as_json=False))
+    sys.exit(run(list(args.args), as_json=args.json))
 
 
 def cmd_sec(args):
@@ -151,6 +194,7 @@ def cmd_watchlist(args):
 
 
 def main():
+    _relax_output_encoding()
     parser = argparse.ArgumentParser(
         description="invest-cli — 投资分析 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -172,6 +216,35 @@ def main():
     p_us = subparsers.add_parser("us", help="美股分析")
     p_us.add_argument("symbol", help="美股代码")
     p_us.add_argument("--json", action="store_true")
+
+    # quote（免鉴权批量实时行情：一次请求、跨市场、130ms 量级）
+    p_quote = subparsers.add_parser("quote", help="免鉴权多标的实时行情（一次请求，跨市场）")
+    p_quote.add_argument("symbols", help="一个或多个标的，逗号分隔：600519,00700,AAPL 或 贵州茅台")
+    p_quote.add_argument("--json", action="store_true")
+
+    # kline（K线：原生快路径 + CLI 兜底）
+    p_kl = subparsers.add_parser("kline", help="K线（原生快路径，分钟级自动转 westock CLI）")
+    p_kl.add_argument("code", help="标的代码或名称")
+    p_kl.add_argument("--period", default="day",
+                      help="day/week/month/year 或 m1/m5/m15/m30/m60/m120（默认 day）")
+    p_kl.add_argument("--limit", type=int, default=60, help="根数（默认 60）")
+    p_kl.add_argument("--json", action="store_true")
+
+    # westock（腾讯微证券 CLI 长尾能力透传：筹码/龙虎榜/资金流/一致预期/板块…）
+    p_ws = subparsers.add_parser("westock", add_help=False,
+                                 help="透传腾讯微证券 CLI（筹码/龙虎榜/资金流/一致预期/ESG/产业链/板块估值…）")
+    # add_help=False：不加的话 `invest-cli westock --help` 会被本层 argparse 截获，
+    # 只打出 5 行自己的 usage，而用户要的是 westock 那 19 组 / 85 行命令树。
+    # 让 `--help` 透传给真实 CLI（`invest-cli westock -h` 的语义因此与直接敲
+    # `westock --help` 一致），本层的参数说明由 `--json` 与文档承担。
+    p_ws.add_argument("args", nargs=argparse.REMAINDER,
+                      help="westock 子命令与参数，如 chip sh600519 / lhb / screen strategy --list")
+    # 自己接住 --help 并转发给真实 CLI：add_help=False 只是关掉本层帮助，
+    # 不定义这个旗标的话 argparse 会报 "unrecognized arguments: --help"，
+    # 用户就再也看不到 westock 那 19 组 / 85 行命令树了。
+    p_ws.add_argument("-h", "--help", action="store_true", dest="ws_help",
+                      help="透传 westock CLI 的帮助（真实命令树）")
+    p_ws.add_argument("--json", action="store_true")
 
     # sec（SEC EDGAR 财报原文，免费官方源）
     p_sec = subparsers.add_parser("sec", help="SEC EDGAR 美股财报原文（10-K XBRL + 最近申报）")
@@ -227,7 +300,10 @@ def main():
 
     # watchlist（本地自选股）
     p_wl = subparsers.add_parser("watchlist", help="本地自选股（add/remove/list）")
-    p_wl.add_argument("action", help="add/remove/list")
+    # action 默认 list：真实调用里 `watchlist`（不带 action）比 `watchlist list` 更多，
+    # 而旧定义要求它必填 —— 最常见的写法直接吃 argparse 的 rc=2 + usage。
+    # 「看自选股」是这条命令的自然默认意图，与 `docker ps`、`git branch` 同类。
+    p_wl.add_argument("action", nargs="?", default="list", help="add/remove/list（默认 list）")
     p_wl.add_argument("code", nargs="?", default="", help="标的代码（add/remove 用）")
     p_wl.add_argument("--name", default="", help="自选名称")
     p_wl.add_argument("--type", default="", help="fund/stock")
@@ -244,7 +320,10 @@ def main():
         "stock": cmd_stock,
         "fund": cmd_fund,
         "us": cmd_us,
+        "quote": cmd_quote,
         "sec": cmd_sec,
+        "westock": cmd_westock,
+        "kline": cmd_kline,
         "screen": cmd_screen,
         "datasources": cmd_datasources,
         "wind": cmd_wind,

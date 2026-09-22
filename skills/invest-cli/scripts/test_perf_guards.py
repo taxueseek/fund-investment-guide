@@ -130,16 +130,27 @@ def test_probe_result_persists_across_processes(monkeypatch, tmp_path) -> None:
     )
 
 
-def test_negative_probe_result_expires_fast(monkeypatch) -> None:
-    """负结果必须比正结果过期快得多（一次抖动不该禁用一个源几分钟）。
+def test_negative_probe_result_expires_faster_than_positive(monkeypatch) -> None:
+    """负结果必须比正结果过期快（一次抖动不该禁用一个源几分钟）。
 
     这是探测类设计的典型自伤：把「瞬时不可达」当「持续不可用」长期缓存，
     结果一个可用源被静默跳过。正/负 TTL 必须**非对称**。
+    （负 TTL 默认 120s 而非更早的 20s：探测 False 只来自「连不上」，
+    恢复以分钟计；20s 会让不可达机器的 us 链每 20s 重付 2s 探测，实测 us 冷 2.6s。）
     """
-    assert registry._PROBE_DISK_TTL_FAIL < registry._PROBE_DISK_TTL / 5, (
-        "负结果缓存过长 = 瞬时网络抖动被放大成持续不可用"
+    assert registry._probe_disk_ttl_fail() < registry._PROBE_DISK_TTL, (
+        "负结果缓存 ≥ 正结果 = 非对称设计失效"
     )
-    assert registry._PROBE_DISK_TTL_FAIL <= 60.0
+
+
+def test_negative_probe_ttl_env_override(monkeypatch) -> None:
+    """INVEST_CLI_PROBE_TTL_FAIL 可覆盖负缓存 TTL；非法值回默认。"""
+    monkeypatch.setenv("INVEST_CLI_PROBE_TTL_FAIL", "15")
+    assert registry._probe_disk_ttl_fail() == 15.0
+    monkeypatch.setenv("INVEST_CLI_PROBE_TTL_FAIL", "not-a-number")
+    assert registry._probe_disk_ttl_fail() == registry._PROBE_DISK_TTL_DEFAULT_FAIL
+    monkeypatch.setenv("INVEST_CLI_PROBE_TTL_FAIL", "-5")
+    assert registry._probe_disk_ttl_fail() == 0.0
 
 
 def test_probe_cache_key_includes_cache_root(monkeypatch, tmp_path) -> None:
@@ -188,7 +199,7 @@ def test_expired_negative_cache_is_reprobed(monkeypatch, tmp_path) -> None:
     path = registry._probe_cache_path(("http", registry._probe_url_for_module("yfinance")))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_json.dumps({"ok": False, "detail": "stale timeout"}), encoding="utf-8")
-    old = time.time() - (registry._PROBE_DISK_TTL_FAIL + 10)
+    old = time.time() - (registry._probe_disk_ttl_fail() + 10)
     os.utime(path, (old, old))
 
     ok, detail = registry._probe_python("yfinance")
@@ -464,3 +475,238 @@ if __name__ == "__main__":
     import pytest
 
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_adapter_negative_probe_not_persisted(monkeypatch, tmp_path) -> None:
+    """adapter 型探测失败不得落盘（120s 负缓存只属于 http 型）。
+
+    adapter 的 False 来自「凭据缺失/过期」，用户补好凭据是秒级恢复；
+    落盘负缓存会让 datasources 排障给出 2 分钟前的旧结论（对抗审查发现）。
+    """
+    import json as _json
+    import os
+
+    monkeypatch.setenv("INVEST_CLI_CACHE_DIR", str(tmp_path))
+    registry._PROBE_CACHE.clear()
+
+    def _fake_adapter_detect():
+        return False, "缺少凭据"
+
+    conf = {"detect": {"type": "env_or_file", "files": []}, "adapters": ["fakeadapter"], "env_var": "NOPE"}
+    real_import = registry.importlib.import_module
+
+    def _fake_import(name):
+        if name == "sources.fakeadapter":
+            import types
+            mod = types.ModuleType("fakeadapter")
+            mod.detect = _fake_adapter_detect
+            return mod
+        return real_import(name)
+
+    monkeypatch.setattr(registry.importlib, "import_module", _fake_import)
+    ok, detail = registry.detect(conf)
+    assert ok is False
+    disk = registry._probe_cache_path(registry._probe_cache_key(("adapter", "fakeadapter")))
+    assert disk is None or not disk.is_file(), "adapter 失败被落盘 = 120s 负缓存误伤凭据秒恢复场景"
+
+
+# ── 7. yfinance 的「为一个字段打一次请求」必须被跳过（且跳过是真的，不是死代码）
+#
+# 实测背景（yfinance 1.7.0）：`Ticker.info` 在 `_fetch_info` 之后必然再调
+# `_fetch_complementary`，后者 1.x 的**全部内容**就是为 `trailingPegRatio`
+# 发一次 `ws/fundamentals-timeseries`。逐请求打点显示它是 us 路径里唯一
+# 不与任何请求并发的那一段（串在关键路径尾部，实测 0.16s ~ 2.24s），
+# 而 invest-cli 从不读该字段。
+#
+# 与第 6 节同一纪律：补丁必须**可验证地生效**，所以这里断言的是
+# 「上游实现没被调用 + 网络层没被碰」，而不是「函数被替换过」。
+
+def _bare_quote():
+    """构造只够跑 `_fetch_complementary` 的最小 Quote 替身，且一碰网络就炸。"""
+    from yfinance.scrapers.quote import Quote
+
+    class _NoNetwork:
+        def __getattr__(self, name):  # pragma: no cover - 命中即失败
+            raise AssertionError(f"跳过补取后不该再碰网络层属性：{name}")
+
+    q = Quote.__new__(Quote)  # 绕过 __init__，不触发任何 IO
+    q._already_fetched_complementary = False
+    q._info = {"shortName": "Apple Inc."}
+    q._symbol = "AAPL"
+    q._data = _NoNetwork()
+    return q
+
+
+def test_skip_yf_complementary_avoids_network_and_keeps_shape(monkeypatch) -> None:
+    """打补丁后：不发请求、键集不变、幂等标记照置。"""
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    upstream_calls = []
+
+    def _upstream(self):  # 上游实现的替身：被调用即记录
+        upstream_calls.append(1)
+        self._already_fetched_complementary = True
+        self._info["trailingPegRatio"] = 2.699
+
+    monkeypatch.setattr(Quote, "_fetch_complementary", _upstream)
+    cmd_us._skip_yf_complementary()
+
+    assert getattr(Quote._fetch_complementary, "_invest_cli_skipped", False), (
+        "补丁没落到 Quote._fetch_complementary 上——跳过是死代码"
+    )
+
+    q = _bare_quote()
+    Quote._fetch_complementary(q)
+
+    assert upstream_calls == [], "打补丁后仍调用了上游实现 = 请求照发"
+    assert q._already_fetched_complementary is True, "幂等标记未置位，重复访问会重入"
+    assert q._info.get("trailingPegRatio", "MISSING") is None, (
+        "键集被改变：上游「Yahoo 无该数据」分支写的就是 None，需保持一致"
+    )
+
+
+def test_skip_yf_complementary_is_idempotent(monkeypatch) -> None:
+    """重复调用不得二次包装（多次调用 fetch_us_data 是常态）。"""
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    monkeypatch.setattr(Quote, "_fetch_complementary", lambda self: None)
+    cmd_us._skip_yf_complementary()
+    first = Quote._fetch_complementary
+    cmd_us._skip_yf_complementary()
+    assert Quote._fetch_complementary is first
+
+
+def test_skip_yf_complementary_env_opt_out(monkeypatch) -> None:
+    """`INVEST_CLI_YF_FULL_INFO=1` 必须能恢复上游完整行为（逃生舱）。"""
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    def _upstream(self):
+        pass
+
+    monkeypatch.setattr(Quote, "_fetch_complementary", _upstream)
+    monkeypatch.setenv("INVEST_CLI_YF_FULL_INFO", "1")
+    cmd_us._skip_yf_complementary()
+    assert Quote._fetch_complementary is _upstream, "逃生舱未生效"
+
+
+def test_skip_yf_complementary_tolerates_missing_internals(monkeypatch) -> None:
+    """上游改名/重构时静默退化，绝不抛异常让取数失败。"""
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    monkeypatch.delattr(Quote, "_fetch_complementary", raising=False)
+    cmd_us._skip_yf_complementary()  # 不抛即通过
+
+
+def test_fetch_us_data_wires_the_skip() -> None:
+    """反回归：跳过函数必须真的接线在取数入口上（否则同「死补丁」）。"""
+    import ast
+
+    tree = ast.parse((_SCRIPTS / "cmd_us.py").read_text(encoding="utf-8"))
+    wired = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "fetch_us_data":
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and getattr(sub.func, "id", "") == "_skip_yf_complementary":
+                    wired = True
+    assert wired, "fetch_us_data 未调用 _skip_yf_complementary——优化静默失效"
+
+
+# ── 8. 快照命中必须在路由之前判定（否则每次命中都白付一轮配置解析与适配器 import）
+#
+# 实测：缓存命中这条路径（占真实调用的绝大多数，见下）原本也要先跑
+# candidates()——它读 data-sources.yaml（yaml.safe_load 2.7ms/次）并 import
+# 链上每个适配器模块；sources.bitget 一带进来就是 urllib.request → http.client
+# → ssl 一整串。整条 us 热路径的 import 自耗时实测约 50ms，其中 20-25ms 出自
+# 这条链，只为返回一个磁盘上躺着的 JSON。
+#
+# 断言用源码顺序而不是计时：计时在 CI/不同机器上会飘，而「谁先谁后」是
+# 这个不变式本身。
+
+def test_snapshot_cache_is_checked_before_routing() -> None:
+    """反回归：route.fetch 里 cache_get 必须出现在 candidates 之前。"""
+    import ast
+
+    src = (_SCRIPTS / "sources" / "route.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "fetch"),
+        None,
+    )
+    assert fn is not None, "route.fetch 不见了"
+
+    def _first_line(pred) -> int | None:
+        # 取**行号最小**的调用点：ast.walk 是广度优先，遍历顺序不等于源码顺序，
+        # 直接返回首个命中会随节点层级漂移。
+        lines = [
+            node.lineno
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call) and pred(node)
+        ]
+        return min(lines) if lines else None
+
+    cache_line = _first_line(
+        lambda c: isinstance(c.func, ast.Name) and c.func.id == "cache_get"
+    )
+    cand_line = _first_line(
+        lambda c: isinstance(c.func, ast.Name) and c.func.id == "candidates"
+    )
+    assert cache_line is not None, "route.fetch 不再读快照缓存"
+    assert cand_line is not None, "route.fetch 不再调 candidates"
+    assert cache_line < cand_line, (
+        "快照命中判定被挪到 candidates() 之后——缓存命中会重新解析配置并 import 整条适配器链"
+    )
+
+
+def test_skip_yf_complementary_refuses_incompatible_signature(monkeypatch) -> None:
+    """反回归：上游签名变化时**不得**打补丁（独立对抗审查发现的缺口）。
+
+    原实现只判「属性存在」。把别的东西搬到这个名字下（例如多一个必填参数）时，
+    补丁仍会装上，原实现被静默换掉——不报错、也不退化成现状行为。
+    """
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    calls = []
+
+    def _incompatible(self, required_extra):  # 多一个必填参数
+        calls.append("orig")
+
+    monkeypatch.setattr(Quote, "_fetch_complementary", _incompatible)
+    cmd_us._skip_yf_complementary()
+
+    assert Quote._fetch_complementary is _incompatible, (
+        "签名不兼容仍被覆盖——上游语义变了也不会报错"
+    )
+    assert not getattr(Quote._fetch_complementary, "_invest_cli_skipped", False)
+
+
+def test_skip_yf_complementary_opt_out_is_case_insensitive(monkeypatch) -> None:
+    """逃生舱取值大小写无关：`FALSE` 与 `false` 必须同义。"""
+    pytest.importorskip("yfinance")
+    from yfinance.scrapers.quote import Quote
+
+    import cmd_us
+
+    for val in ("1", "true", "TRUE", "yes", "no", "FALSE", "False", "off", "on"):
+        monkeypatch.setattr(Quote, "_fetch_complementary", lambda self: None, raising=True)
+        before = Quote._fetch_complementary
+        monkeypatch.setenv("INVEST_CLI_YF_FULL_INFO", val)
+        cmd_us._skip_yf_complementary()
+        patched = getattr(Quote._fetch_complementary, "_invest_cli_skipped", False)
+        expect_patched = val.lower() in ("", "0", "false", "no", "off")
+        assert patched is expect_patched, f"{val} 的语义与预期相反（大小写敏感）"
+        assert (Quote._fetch_complementary is before) == (not expect_patched)

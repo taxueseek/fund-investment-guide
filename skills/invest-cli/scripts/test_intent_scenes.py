@@ -38,9 +38,32 @@ def test_dispatch_scene_shapes() -> None:
     ):
         d = _dispatch(scene, "示例输入")
         assert d["route"][0] == kind, f"{scene} 应路由到 {kind}，实际 {d}"
+    # JSON 输入交给 run() 层解析（这里不重复解析，避免两份口径）
     d = _dispatch("portfolio", '{"totalAssets": 1000000}')
     assert d["route"][0] == "yingmi"
-    assert d["route"][2] == {"input": '{"totalAssets": 1000000}'}  # 原文打包；JSON 解析在 run() 层
+    assert d["route"][2] == {}
+
+
+def test_portfolio_natural_language_becomes_fund_list() -> None:
+    """SKILL 承诺「持仓 json 或自然语言」；旧实现把整串当 input 发出去，服务端必回 400。"""
+    d = _dispatch("portfolio", "110011:50,005827:50")
+    assert d["route"][2] == {"fundList": [
+        {"fundCode": "110011", "amount": 50.0},
+        {"fundCode": "005827", "amount": 50.0},
+    ]}
+    # 不写金额时给等权默认，至少能诊断出持仓结构
+    d2 = _dispatch("portfolio", "110011 005827")
+    assert [i["fundCode"] for i in d2["route"][2]["fundList"]] == ["110011", "005827"]
+    assert all(i["amount"] > 0 for i in d2["route"][2]["fundList"])
+
+
+def test_plan_natural_language_becomes_three_params() -> None:
+    """「能承受 20% 回撤 / 5 年 / 年化 8%」要换算成三个查询参数（百分比→小数）。"""
+    d = _dispatch("plan", "能承受20%回撤 5年 预期年化8%")
+    params = d["route"][2]
+    assert params["expectedDrawdown"] == 0.2
+    assert params["expectedAnnualizedReturnRate"] == 0.08
+    assert params["expectedInvestTime"] == "5y"
 
 
 def test_present_no_ghost_wind_tool() -> None:

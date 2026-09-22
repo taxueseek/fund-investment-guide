@@ -722,3 +722,172 @@ def test_us_real_info_still_passes(monkeypatch) -> None:
     snap = cmd_us.fetch_us_data("AAPL")
     assert snap["name"] == "Apple Inc."
     assert snap["quote"]["price"] == 200.0
+
+
+# ── 可用性判据必须与凭据加载器共用同一查找面
+#
+# 实测（2026-09-22）：把 HITHINK_FINANCE_API_KEY 只写在 ~/.zshenv 时——
+#     read_env 找到 key 吗: True
+#     hithink.load_api_key 找到吗: True
+#     hithink.detect() -> (False, '缺少 HITHINK_FINANCE_API_KEY 且无凭据文件')
+#     registry.detect(hithink) -> (False, ...)
+# registry 对 env_or_file 型会**直接采信适配器判断**（不回退到 _probe_env），
+# 于是同花顺被静默移出 A 股快照链、股票落到东财（口径不同），
+# `datasources` 还给出「缺少环境变量 且无凭据文件」这个错误原因。
+# sources/env.py 的模块说明正是把「只读 os.environ」点名为漂移源。
+
+def _stub_env_sources(monkeypatch, tmp_path, rc_lines: str):
+    """把 read_env 的查找面收敛到一份临时 rc 文件（并关掉 launchctl 分支）。"""
+    from sources import env as envmod
+
+    rc = tmp_path / ".zshenv"
+    rc.write_text(rc_lines, encoding="utf-8")
+    monkeypatch.setattr(envmod, "default_rc_files", lambda: [rc])
+    monkeypatch.setattr(envmod, "_launchctl_getenv", lambda name: "")
+    return envmod
+
+
+def test_hithink_detect_agrees_with_loader_on_rc_key(monkeypatch, tmp_path) -> None:
+    """rc/launchctl 里配好的 key，detect 必须认（与 load_api_key 同结论）。"""
+    from sources import hithink
+
+    envmod = _stub_env_sources(
+        monkeypatch, tmp_path, f"export {hithink.ENV_KEY}=KEY_FROM_RC\n"
+    )
+    monkeypatch.delenv(hithink.ENV_KEY, raising=False)
+    monkeypatch.setattr(hithink, "credential_files", lambda: [])
+
+    assert envmod.read_env(hithink.ENV_KEY) == "KEY_FROM_RC"
+    assert hithink.load_api_key() == "KEY_FROM_RC"
+    ok, detail = hithink.detect()
+    assert ok is True, (
+        f"detect 与 load_api_key 结论不一致（{detail}）——主数据源会被静默丢掉"
+    )
+
+
+def test_hithink_detect_still_reports_missing_when_truly_absent(monkeypatch, tmp_path) -> None:
+    """反向用例：真的没配时必须报不可用，不能修成一律可用。"""
+    from sources import hithink
+
+    _stub_env_sources(monkeypatch, tmp_path, "# 没有这个变量\n")
+    monkeypatch.delenv(hithink.ENV_KEY, raising=False)
+    monkeypatch.setattr(hithink, "credential_files", lambda: [])
+
+    ok, detail = hithink.detect()
+    assert ok is False and hithink.ENV_KEY in detail
+
+
+def test_wind_api_key_agrees_with_detect_on_rc_key(monkeypatch, tmp_path) -> None:
+    """Wind 的 key 回退同样走 read_env（只读 os.environ 是同一个漂移）。"""
+    from sources import wind
+
+    _stub_env_sources(monkeypatch, tmp_path, "export WIND_API_KEY=WIND_FROM_RC\n")
+    monkeypatch.delenv("WIND_API_KEY", raising=False)
+    monkeypatch.setattr(wind, "GLOBAL_CONFIG", tmp_path / "no-such-config")
+    monkeypatch.delenv("WIND_SKILL_DIR", raising=False)
+
+    assert wind._api_key() == "WIND_FROM_RC"
+    assert wind.detect()[0] is True
+
+
+# ── 可用性判据 = 凭据加载器（东财曾是唯一的例外）
+#
+# 实测：~/.config/invest-cli/eastmoney.env 里只写一行注释时，
+# registry 的通用「文件存在性」回退给出 (True, '读到 credentials.env')，
+# 而 eastmoney.load_api_key() 返回 ''——`datasources` 报「文件凭据可用」，
+# 每次 screen/港股取数却报「未设置 EASTMONEY_APIKEY」，排障被带偏。
+
+def test_eastmoney_detect_uses_loader_not_file_existence(monkeypatch, tmp_path) -> None:
+    """空凭据文件（只有注释）不得被判可用。"""
+    from sources import eastmoney
+
+    envfile = tmp_path / "eastmoney.env"
+    envfile.write_text("# 只有注释，没有 key\n", encoding="utf-8")
+    monkeypatch.setattr(eastmoney, "credential_files", lambda: [envfile])
+    monkeypatch.delenv(eastmoney.ENV_KEY, raising=False)
+
+    assert eastmoney.load_api_key() == "", "前提失效：加载器竟然读到了 key"
+    ok, detail = eastmoney.detect()
+    assert ok is False, "空凭据文件被判可用——datasources 会给出与实取不符的结论"
+    assert str(envfile) in detail, "报错未指出检查过哪个文件，排障无从下手"
+
+
+def test_eastmoney_detect_accepts_real_key(monkeypatch, tmp_path) -> None:
+    """反向用例：文件里真有 key 时必须判可用。"""
+    from sources import eastmoney
+
+    envfile = tmp_path / "eastmoney.env"
+    envfile.write_text(f'{eastmoney.ENV_KEY}="real-key"\n', encoding="utf-8")
+    monkeypatch.setattr(eastmoney, "credential_files", lambda: [envfile])
+    monkeypatch.delenv(eastmoney.ENV_KEY, raising=False)
+
+    ok, detail = eastmoney.detect()
+    assert ok is True, f"真有 key 却判不可用：{detail}"
+
+
+# ── 回撤：上游「全 0」是缺位，不是真的没有回撤
+#
+# 实测：`fund 110011` / `fund 163406` 的 /api/fund/performance/drawdowns 全返回 0，
+# 而同一份载荷里近 1 年回报是 −29.43%——一只近一年跌近三成的基金不可能最大回撤为 0。
+# 旧实现把缺位渲染成 0.0，让下游框架把它当事实用。
+
+def test_zero_drawdown_is_treated_as_missing() -> None:
+    from sources.hithink import _dd
+
+    assert _dd(0) is None, "全 0 回撤被当成有效值"
+    assert _dd(0.0) is None
+    assert _dd(None) is None
+    # 反向：真实负回撤必须保留
+    assert _dd(-12.5) == -12.5
+    assert _dd(-0.3) == -0.3
+
+
+# ── 输入层失败必须终止整条链，不能换源去猜
+#
+# 实测（2026-09-22）：`invest-cli fund -1` 时同花顺正确报「多个候选无法唯一消歧」，
+# 但 route 按「整单回退」继续问 ttskill——而 ttskill 自己也会模糊解析，
+# 于是同一输入在不同时刻返回**两只不同基金**（先 003376、后 006961），rc=0、无告警。
+# 消歧失败是「输入不足以定位标的」，不是「这个源不可用」。
+
+def test_ambiguous_input_stops_the_chain(monkeypatch) -> None:
+    from sources.route import fetch
+
+    invoked = []
+
+    def _ambiguous(sid, kind, arg):
+        invoked.append(sid)
+        return {"source": sid, "kind": kind, "ok": False, "data": None,
+                "error": "多个候选无法唯一消歧: 001.OF 甲, 002.OF 乙", "input_error": True}
+
+    res = fetch("fund", "-1", invoke=_ambiguous, order=["hithink", "ttskill", "eastmoney"])
+    assert res["ok"] is False
+    assert invoked == ["hithink"], f"输入层失败后仍继续换源去猜：{invoked}"
+    assert "无法唯一消歧" in res["error"]
+
+
+def test_source_level_failure_still_falls_back(monkeypatch) -> None:
+    """反向用例：普通的源失败必须照旧回退（不能把孩子跟洗澡水一起倒掉）。"""
+    from sources.route import fetch
+
+    invoked = []
+
+    def _invoke(sid, kind, arg):
+        invoked.append(sid)
+        if sid == "hithink":
+            return {"source": sid, "kind": kind, "ok": False, "data": None, "error": "HTTP 500"}
+        return {"source": sid, "kind": kind, "ok": True, "data": {"ok": True}, "error": None}
+
+    res = fetch("fund", "110011", invoke=_invoke, order=["hithink", "ttskill"])
+    assert res["ok"] is True and res.get("source") == "ttskill"
+    assert invoked == ["hithink", "ttskill"]
+
+
+def test_hithink_marks_ambiguity_as_input_error(monkeypatch) -> None:
+    """产生侧：消歧失败的信封必须带 input_error（产消两侧共用同一常量）。"""
+    from sources import hithink
+
+    env = hithink._envelope("fund", False, error=f"{hithink.AMBIGUOUS_PREFIX}: 001.OF 甲, 002.OF 乙")
+    assert env.get("input_error") is True
+    # 反向：普通错误不得被标记（否则会把可回退的失败也终止掉）
+    assert "input_error" not in hithink._envelope("fund", False, error="HTTP 500")
+    assert "input_error" not in hithink._envelope("fund", True, data={})

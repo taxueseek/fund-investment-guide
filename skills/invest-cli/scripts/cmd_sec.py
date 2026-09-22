@@ -69,6 +69,13 @@ def format_terminal(data: dict) -> str:
 
 
 def run(ticker: str, forms: str = "", limit: int = 5, as_json: bool = False) -> int:
+    # `sec_edgar.filings` 内部用 `max(1, limit)` 兜底，所以 `--filings 0` 会
+    # 静默返回 1 条、`--filings -3` 同样返回 1 条——参数被无声吞掉。
+    # 「最近 0 条申报」本身没有意义，属于调用方写错，边界上直接报错比给一条
+    # 意外数据更好（agent 拿到 1 条会以为参数生效了）。
+    if limit < 1:
+        print(f"错误: --filings 必须是 ≥1 的整数（收到 {limit}）", file=sys.stderr)
+        return 1
     form_list = [f.strip() for f in (forms or "").split(",") if f.strip()]
     res = sec_edgar.snapshot(ticker, forms=form_list, limit=limit)
     if as_json:

@@ -119,14 +119,16 @@ description: |
 
 | 数据源 | 覆盖 | 优先级 | 默认快照链 |
 | --- | --- | --- | --- |
-| Wind（万得） | 个股/基金/指数/债券/宏观/资讯 | 80 | 否（仅 `invest-cli wind` 透传；无 stock()/fund()） |
-| 盈米且慢 | 基金诊断/策略/财富 | 70 | 否（intent deep fund 的「诊断」问题；无 fund() 快照） |
+| Wind（万得） | 个股/基金/指数/债券/宏观/资讯 | 80 | 否（仅 `invest-cli wind` 透传；无 stock()/fund()）。**直连 Wind MCP**，只要 `WIND_API_KEY`，不需要装 node CLI |
+| 盈米且慢 | 基金诊断/策略/财富 | 70 | 否（intent deep fund 的「诊断」问题；无 fund() 快照）。**直连盈米 OpenAPI**，只要 apiKey，不需要装 `yingmi-skill-cli` |
 | 同花顺金融数据服务 | A 股/公募快照 | 60 | 是（stock A、fund） |
 | 东方财富 | 行情/基金/选股 | 50 | 是（港股、回退、自然语言选股）；key 配 `~/.config/invest-cli/eastmoney.env`（技能市场申请） |
-| yfinance | 美股 + A股/港股兜底 | 40 | 是（us；stock 链末位兜底，未安装则跳过） |
+| yfinance | 美股 + A股/港股兜底 | 40 | 是（us 主位；stock 链末位兜底，未安装则跳过） |
+| 腾讯行情（tencent） | 多市场实时行情（A股/港股/美股/ETF/可转债） | 37 | 是（us 兜底位；A股/港股链末位）。**零鉴权、一次请求可带多标的**，实测单标的 ~130ms；无基本面，故不进主位。行情类问题直接走 `invest-cli quote` |
 | SEC EDGAR | 美股财报原文（10-K XBRL 指标 + 申报清单） | 45 | 否（不经快照链；`invest-cli sec <代码>` 直取，免费无 key） |
+| 腾讯微证券 CLI（westock） | 筹码/龙虎榜/资金流/一致预期/ESG/机构评级/产业链/板块估值/可转债条款 | 30 | 否（不经快照链；`invest-cli westock <args>` 透传 40+ 子命令，补既有源没有的市场结构类能力） |
 | Bitget rToken | 美股代币价 | 35 | 是（us 回退） |
-| 天天基金（官方 ttskill） | fund 深取（同类分位/机构占比/在管） | 55 | 是（fund，登录就绪时排 hithink 之后）；黄金走 intent deep commodity→TTFUND_GOLD_INFO |
+| 天天基金（直连 gateway） | fund 深取（同类分位/机构占比/在管） | 55 | 是（fund，登录就绪时排 hithink 之后）；黄金走 intent deep commodity→TTFUND_GOLD_INFO。**直连官方 gateway**，沿用官方凭据（Keychain）与 ed25519 签名，不需要装 ttskill CLI |
 | FRED 宏观时序 | 净流动性三序列（总资产/TGA/ON RRP）+ SOFR | 25 | 否（`intent macro` 优先；无 key 走 fredgraph.csv 免 key 回退，仍失败降级 argo） |
 | argo | 资讯/舆情/宏观检索 | —（不经快照链） | 否（`intent macro`、`invest-cli info` 直调） |
 
@@ -146,7 +148,9 @@ description: |
 | --- | --- | --- |
 | 个股三关快照（A股） | `invest-cli stock <代码>` 或 `intent deep stock` | hithink > eastmoney |
 | 个股三关快照（港股） | 同上 | eastmoney |
-| 美股快照 | `invest-cli us` 或 `intent deep us` | yfinance > bitget |
+| 美股快照 | `invest-cli us` 或 `intent deep us` | yfinance > tencent > bitget |
+| 只要行情（现在多少钱/涨跌，可多标的） | `invest-cli quote <代码...>`（逗号分隔，跨市场） | tencent（零鉴权，一次请求）|
+| 市场结构类（筹码/资金流/龙虎榜/一致预期/板块估值/产业链） | `invest-cli westock <子命令>` | 腾讯微证券 CLI（透传，自带代码归一化）|
 | 美股财报原文（10-K 指标 + 申报链接） | `invest-cli sec <代码>` | SEC EDGAR 官方（免费无 key；与 Wind/yfinance 数字交叉验证） |
 | 基金三关快照（净值/费率/重仓/收益） | `invest-cli fund <代码>` | hithink > eastmoney（ttskill 就绪时深取补充） |
 | 基金诊断雷达 | `intent deep fund <代码>` | 盈米 GetFundDiagnosis；失败再走基金快照链 |
@@ -155,7 +159,7 @@ description: |
 | 宏观/市场 | `intent macro` | FRED 净流动性（WALCL/TGA/ON RRP + SOFR；无 key 走免 key CSV 回退）；失败降级 argo（nbs_stats 等，免配额） |
 | HTML 报告阅读 | `intent present <html文件>` | 本地提取正文（终端摘要；PDF 导出用浏览器打印） |
 | 组合诊断/配置 | `intent portfolio <持仓json或自然语言>` | 盈米 |
-| 家庭财务规划 | `intent plan <家庭数据json或自然语言>` | 盈米 |
+| 家庭财务规划 | `intent plan <自然语言>`，**必须含「投资三性」至少一项**（预期年化收益率 / 投资期限 / 最大回撤，如 `intent plan 能承受20%回撤 5年 预期年化8%`）；只给「30岁 年收入30万」会被盈米以 9400 拒绝 | 盈米 |
 | 自然语言选股 | `intent screen` / `invest-cli screen` | eastmoney |
 | 资讯 / 舆情 / 宏观背景 | `invest-cli info <查询词>` | argo |
 
@@ -179,9 +183,10 @@ description: |
 ## 维护
 
 - **版本与变更**：见 `CHANGELOG.md`；改路由表/图谱后必须同步更新
-- **共享方法论真源**：`_shared/references/`（成员 skill 引用共享路径，不复制副本）
+- **共享方法论真源**：`_shared/references/`（成员 skill 用**软链**引用，不复制副本；`test_skill_integrity.py` 有守卫防止有人手滑改成实体副本）
+- **数据层运行时约定**：`references/cli-runtime.md`（PATH 优先/skill 树兜底、外部依赖只允许「登录态源」与「搜索技能」两类）。**取数分工的唯一真源是本文件的映射表**，cli-runtime 里那张同名旧表已作废
 - **归档记录**：invest-report、invest-fund-manager、invest-us、hk-a-share-deep-analysis 等已并入上表成员，原文在 `~/.claude/skills-archive/`；2026-09-03 冗余 skill（smart-investor 四件套、stock-analysis、investment-agent、eastmoney、eastmoney-financial-data、financial-report-analyst）已 git 备份后从注册表删除，原文见 `~/.agents` 仓 commit 0479653；2026-09-03 invest-bond/convertible/commodity/reit 四技能合并为 invest-asset（同一三关模板×四种资产参数），原文见 `~/.claude/skills-archive/2026-09-03_merged-invest-asset/`
 
 ---
 
-*invest v2.5 | 纯路由 + 统一数据层 + 消融维护(链对齐/死路由/退役文档清理) | 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*
+*invest v2.7 | 纯路由 + 统一数据层（天天/盈米/Wind 直连 API，无外部 CLI 依赖；腾讯行情/微证券并入）| 股基+四资产合一(债/转债/商品/REIT)+宏观+配置+圆桌+机构深度+分析师工作台*

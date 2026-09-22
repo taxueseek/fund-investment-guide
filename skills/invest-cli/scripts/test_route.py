@@ -202,13 +202,22 @@ def test_fetch_detects_next_source_when_first_unavailable(monkeypatch) -> None:
 
 
 def test_fetch_all_unavailable_keeps_original_message(monkeypatch) -> None:
-    """整链都不通过探测时，结论与措辞必须与旧 pick() 一致。"""
+    """整链都不通过探测时，结论与**前缀措辞**必须与旧 pick() 一致。
+
+    本轮追加（场景实测发现）：只报 `kind=fund market=-` 是内部术语，用户看不出
+    缺哪个 key——同一条链上的 stock 会把逐源原因列全。现在把探测失败原因接在
+    原措辞之后，前缀不变，附加原因可省（`errors` 为空时保持原样）。
+    """
     import sources.route as route
 
     monkeypatch.setattr(route, "detect", lambda conf: (False, "缺 key"))
     res = route.fetch("fund", "110011")
     assert res["ok"] is False
-    assert res["error"] == "无可用数据源: kind=fund market=-"
+    assert res["error"].startswith("无可用数据源: kind=fund market=-")
+    assert "缺 key" in res["error"], "报错没带逐源原因，用户不知道缺什么"
+    assert res["tried"], "应给出试过哪些源"
+
+
 
 
 if __name__ == "__main__":

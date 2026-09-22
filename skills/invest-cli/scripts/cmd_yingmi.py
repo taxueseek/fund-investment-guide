@@ -17,7 +17,7 @@ def run(tool_name: str, params_json: str, as_json: bool = False) -> int:
     ok, detail = yingmi_src.detect()
     if not ok:
         print(f"盈米不可用: {detail}", file=sys.stderr)
-        print("提示: 先执行 yingmi-skill-cli init setup 完成初始化。", file=sys.stderr)
+        print("提示: 先配置盈米 apiKey（~/.yingmi-skill-cli/config.json）。", file=sys.stderr)
         return 1
     result = yingmi_src.call(tool_name, params_json=params_json)
     if as_json:

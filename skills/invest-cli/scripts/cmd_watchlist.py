@@ -105,6 +105,12 @@ def _quote(code: str, typ: str = "") -> str:
 
 def run(action: str, code: str = "", name: str = "", typ: str = "",
         with_quote: bool = False, as_json: bool = False) -> int:
+    # 空代码必须挡在写盘之前。实测：`watchlist add ""` 会往自选里写一条
+    # `{"code": "", ...}` 并以 rc=0 返回 `{'code': '', 'added': True}`——
+    # 既污染用户数据（自选是持久数据，不是缓存），又让调用方以为成功了。
+    if action in ("add", "remove") and not str(code or "").strip():
+        print(f"watchlist {action}: 缺少标的代码", file=sys.stderr)
+        return 1
     if action == "add":
         out = add(code, name, typ)
     elif action == "remove":
@@ -124,6 +130,10 @@ def run(action: str, code: str = "", name: str = "", typ: str = "",
 
     if as_json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
+        # 退出码必须与信封一致：此前 `--json` 分支无论 ok 与否都 return 0，
+        # 于是「已在自选」「不在自选」这些失败在机器可读路径上被读成成功
+        # （终端路径反而正确地 return 1）——同一个结论两条路径相反。
+        return 0 if out.get("ok") else 1
     else:
         if not out.get("ok"):
             print(f"watchlist: {out.get('error')}", file=sys.stderr)
@@ -137,5 +147,9 @@ def run(action: str, code: str = "", name: str = "", typ: str = "",
                 for it in items:
                     print(f"  {it.get('code')}  {it.get('name', '')}  {it.get('type','')}  {it.get('quote','')}")
         else:
-            print(out["data"])
+            # 终端分支此前直接 print(dict)，输出 Python repr（单引号、非 JSON），
+            # 与 `list` 的表格、与 `--json` 的合法 JSON 三方不一致。
+            # 这里给一行人话；机器可读的统一走 `--json`。
+            verb = "已加入自选" if action == "add" else "已从自选移除"
+            print(f"{verb}: {(out.get('data') or {}).get('code', '')}")
     return 0

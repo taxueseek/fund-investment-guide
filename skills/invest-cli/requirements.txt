@@ -4,3 +4,5 @@
 requests>=2.28
 PyYAML>=6.0
 yfinance>=0.2
+# 天天基金直连 gateway 的 ed25519 签名（官方同一套认证逻辑）
+cryptography>=41.0

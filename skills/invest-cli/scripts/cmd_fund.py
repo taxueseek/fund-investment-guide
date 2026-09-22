@@ -4,6 +4,12 @@
 输出：净值 + 业绩 + 持仓 + 经理 + 费率（对标 invest-fund 三关框架）
 """
 
+# 让注解惰性求值：本模块有 `-> dict | None`（PEP 604），在 Python 3.9 上
+# 会在**导入期**抛 `TypeError: unsupported operand type(s) for |`。
+# 这不是理论问题：wrapper 在 .venv 缺失时回退系统 python3（macOS 自带 3.9.6），
+# 实测 `import cmd_fund` 直接失败，`invest-cli fund ...` 整条命令不可用。
+from __future__ import annotations
+
 import sys
 import json
 import warnings
@@ -17,8 +23,13 @@ from datetime import datetime
 # NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning，
 # 与 UserWarning 无继承关系，用 UserWarning 或 message 正则都拦不住
 # （实测两者均无效，只有按 Warning + module 才生效）。
+#
+# 过滤器留在模块层，`import requests` 下沉到 query_eastmoney()：requests 的
+# import 自耗时实测约 70ms，而它只服务东财**兜底**这一条路（主路走
+# route.fetch：同花顺优先，ttskill 深取补充）。放在模块顶层等于每次
+# `invest-cli fund` 都先白付 70ms。先后关系不受影响：模块导入即装过滤器，
+# requests 的首次导入发生在第一次真正调用 query_eastmoney 时，始终在后。
 warnings.filterwarnings("ignore", category=Warning, module=r"urllib3.*")
-import requests  # noqa: E402
 
 EASTMONEY_URL = "https://mkapi2.dfcfs.com/finskillshub/api/claw/query"
 
@@ -34,6 +45,8 @@ def get_api_key():
 
 
 def query_eastmoney(query: str) -> dict:
+    import requests  # noqa: PLC0415 —— 见文件头「下沉 import」说明
+
     resp = requests.post(
         EASTMONEY_URL,
         headers={"apikey": get_api_key(), "Content-Type": "application/json"},
@@ -94,16 +107,26 @@ def _ttskill_deep(keyword: str) -> dict | None:
     只缓存成功结果：失败若也缓存，一次网络抖动会被放大成持续缺字段。
     """
     from _common import CACHE_TTL_FUNDAMENTAL, cache_get, cache_set
+
+    # 先读深取缓存，**再**判可用性——顺序是这条路径上的性能关键点。
+    #
+    # 可用性判断要 load_registry() → `import yaml` + 解析配置（约 10-13ms）。
+    # 而深取缓存里的字段（同类分位/机构占比/经理在管）本来就是「变动远慢于行情」
+    # 那一批，命中时与 ttskill 此刻是否就绪无关。旧顺序把配置读取放在缓存之前，
+    # 于是 `fund` 的**热路径**（快照已命中磁盘缓存）每次仍要付一遍 yaml：
+    # 实测热跑 yaml 导入事件 19 次，而同结构的 `stock`/`us` 热跑是 0 次。
+    # 独立审查据此指出「重库下沉对 fund 一分没省」，就是这一处顺序导致的。
+    ckey = f"ttskill|{keyword}"
+    hit = cache_get("deep", ckey, CACHE_TTL_FUNDAMENTAL)
+    if isinstance(hit, dict) and hit:
+        return hit
+
     from sources import load_registry
     from sources.registry import detect as detect_conf
 
     conf = load_registry().get("ttskill")
     if not conf or not detect_conf(conf)[0]:
         return None
-    ckey = f"ttskill|{keyword}"
-    hit = cache_get("deep", ckey, CACHE_TTL_FUNDAMENTAL)
-    if isinstance(hit, dict) and hit:
-        return hit
     try:
         from sources import ttskill as tts_src
 
@@ -131,6 +154,8 @@ def fetch_fund_with_fallback(keyword: str) -> dict:
 
     from sources.route import fetch, unwrap_snapshot
 
+    # 代码域守卫（反向）在 route.fetch 里，与 `stock` 共用同一份判据——
+    # 这里不再各写一遍：`stock` 有两条入口，分别加守卫实测漏掉了 `intent deep stock`。
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_snap = pool.submit(lambda: unwrap_snapshot(fetch("fund", keyword)))
         f_deep = pool.submit(_ttskill_deep, keyword)
@@ -249,6 +274,12 @@ def format_terminal(data: dict) -> str:
     lines.append(f"\n{'=' * 60}")
     lines.append(f"  {name}（{data.get('code', '-')}）— 基金快照")
     lines.append(f"{'=' * 60}")
+
+    # adapter 已经算出的告警必须在终端出现（与 cmd_stock 同一条纪律：
+    # payload 里写了原因，终端层丢掉，用户就只能看到一张空表）。
+    note = data.get("note")
+    if note:
+        lines.append(f"\n  提示: {note}")
 
     # 基础
     lines.append(f"\n  {'基础信息':<14} {'数值':>16}")

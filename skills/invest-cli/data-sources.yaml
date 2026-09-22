@@ -67,37 +67,86 @@ sources:
       type: always
     adapters: [bitget]
 
+  tencent:
+    name: 腾讯行情（零鉴权原生内核）
+    kind: api
+    # coverage 是语义标签：只暴露 stock()/us()，无 fund()/screen()，
+    # 因此不进 fund 与 screen 链。见 sources/tencent.py 顶部关于定位的说明。
+    coverage: [stock, us, quote]
+    # priority 37 是**有意卡在 40 与 35 之间**，不是随手取的数：
+    #   · us 链 → [yfinance(40), tencent(37), bitget(35)]
+    #     富源 yfinance 仍在主位（能力不掉：腾讯没有营收/净利润/现金流/分析师评级），
+    #     但把**兜底位**从 bitget 换成腾讯。实测（2026-09-22，注入「Yahoo 不可达」后
+    #     走 order=None 的完整默认链）：
+    #       tencent 241ms，给出真实美股行情（price/PE/PB/市值/52周/股息率/ROE）；
+    #       bitget   857ms，只有 rToken 成交价与 24h 区间，**无 PE/PB/ROE/市值**，
+    #                且按其自身 disclaimer 那是「代币价/USDT/非交易所官方价」。
+    #     即腾讯在兜底位上既快 3.5 倍、口径又是股票而非代币。
+    #   · stock 链（A股/港股）→ 腾讯排在末位附近，仅在富源全失败时顶上，
+    #     因此日常 A股 13 项基本面快照的字段集**不受任何影响**。
+    # 注意不要为了「更快」把它提到 40 以上：那会让 us 快照从 40 项退化成纯行情，
+    # 属能力降级（invest-stock 的评分口径消费 ROE/负债/净利润/毛利率）。
+    priority: 37
+    env_var: TENCENT_REACHABLE
+    # 无凭据可查，可用性判据在适配器 detect()：探一个固定标的（上证指数），
+    # 拿到 HTTP 响应且解析出名字才算可用。判据必须与取数走同一条通道，
+    # 否则就是「装了 ≠ 连得上」（本仓 yfinance 探测那段的教训）。
+    detect:
+      type: env_or_file
+      files: []
+    adapters: [tencent]
+
+  westock:
+    name: 腾讯微证券 CLI（长尾能力透传）
+    kind: cli
+    # coverage 是语义标签：本源**不进快照链**（无 stock()/fund()/us()/screen() 方法），
+    # 只经 `invest-cli westock <args>` 透传，补的是筹码/龙虎榜/资金流/一致预期/
+    # ESG/机构评级/产业链/板块估值/可转债条款等 invest-cli 既有源没有的能力。
+    coverage: [chip, moneyflow, rank, consensus, sector, industry_chain, bond_detail]
+    priority: 30
+    env_var: WESTOCK_BIN
+    # 可用性 = 二进制在 + `--help` 真的跑得起来（实测 22ms）。
+    # 只判断「文件存在」是不够的：原技能正是因此让 16 个函数静默返回空串。
+    detect:
+      type: env_or_file
+      files: []
+    adapters: [westock]
+
   wind:
     name: 万得 Wind
     kind: cli
     coverage: [stock, fund, index, bond, news, macro, analytics]
     priority: 80
-    env_var: WIND_SKILL_DIR
+    env_var: WIND_API_KEY
+    # 直连 Wind MCP（不依赖 wind-mcp-skill 的 node CLI）；可用性 = 有 Key
     detect:
-      type: dir
-      skill: wind-mcp-skill
-      env_dir: WIND_SKILL_DIR
-      key_hint: [~/.wind-aifinmarket/config]
+      type: env_or_file
+      env_var: WIND_API_KEY
+      files:
+        - ~/.wind-aifinmarket/config
     adapters: [wind]
 
   yingmi:
     name: 盈米且慢
-    kind: cli
+    kind: api
     coverage: [fund, strategy, wealth, news]
     priority: 70
+    # 直连盈米 OpenAPI（不依赖 yingmi-skill-cli）；可用性 = 有 apiKey
     detect:
-      type: command
-      cmd: [yingmi-skill-cli, init, status]
-      check: '"hasApiKey": true'
+      type: env_or_file
+      env_var: YINGMI_API_KEY
+      files:
+        - ~/.yingmi-skill-cli/config.json
     adapters: [yingmi]
 
   ttskill:
-    name: 天天基金(官方) ttskill（可选深取引擎）
-    kind: cli
+    name: 天天基金（直连 gateway）
+    kind: api
     # coverage 仅指快照链 kind（fund()）；37 个官方业务包全部经
     # `invest-cli ttskill <skill_id>` 透传可达，清单见 `invest-cli capabilities ttskill`。
     coverage: [fund]
     priority: 55
+    # 直连官方 gateway（不依赖 ttskill CLI）；可用性 = 官方凭据未过期 + 已装业务包
     detect:
       type: env_or_file
       env_var: TTSKILL_STATUS

@@ -10,10 +10,12 @@
 
 | 数据源 | 配置物 | 启用后多出来的能力 | 不配置时 |
 |--------|--------|--------------------|----------|
-| （无） | — | 框架 + 检索 + 用户材料 + 三条免 Key 取数 | 默认路径 |
+| （无） | — | 框架 + 检索 + 用户材料 + 免 Key 取数（含腾讯行情） | 默认路径 |
+| **腾讯行情**（零鉴权） | — | `invest-cli quote` 多标的实时行情、`kline` K 线；美股/港股快照的兜底 | 始终可用 |
+| **腾讯微证券 CLI**（可选） | 安装 westock 二进制 | `invest-cli westock` 长尾能力：筹码/龙虎榜/北向/两融/一致预期/ESG/机构评级/产业链/板块估值/转债条款等 40+ 子命令 | 跳过该源 |
 | **同花顺金融数据服务** | 环境变量 `HITHINK_FINANCE_API_KEY` | `invest-cli stock` / `fund` 的 A 股与公募主路 | 回退东财 |
 | **东方财富** | 环境变量 `EASTMONEY_APIKEY` | A股/港股快照、基金快照、自然语言选股（港股必经） | 该源跳过 |
-| **Yahoo（yfinance）** | 安装 Python 包 `yfinance` | `invest-cli us` 美股快照 | 回退 Bitget rToken 报价（仅行情） |
+| **Yahoo（yfinance）** | 安装 Python 包 `yfinance` | `invest-cli us` 美股快照 | 回退腾讯行情，再退 Bitget rToken 报价（仅行情） |
 | **SEC EDGAR** | 免费无 Key（可选 `SEC_EDGAR_USER_AGENT` 声明身份） | `invest-cli sec` 美股财报原文（10-K XBRL + 申报清单） | 始终可用 |
 | **FRED** | 可选 `FRED_API_KEY` | `invest-cli intent macro` 净流动性三序列（免 Key 走 CSV 回退） | 仍可用（CSV 通道） |
 | **argo**（可选） | 安装 [argo](https://github.com/taxueseek/argo) | `invest-cli info` 资讯/舆情、宏观检索兜底 | 跳过该源 |
@@ -23,11 +25,13 @@
 
 ---
 
-## 0. 零配置也能用：三条免 Key 通道
+## 0. 零配置也能用：免 Key 通道
 
-装上就能取数的三条路（不需要任何 Key）：
+装上就能取数的几条路（不需要任何 Key）：
 
 ```bash
+invest-cli quote 600519,00700,AAPL   # 腾讯行情：多标的实时行情（零鉴权，跨 A股/港股/美股/ETF/可转债）
+invest-cli kline 600519 --period day # K 线（腾讯原生快路径，年线按自然年聚合）
 invest-cli sec AAPL          # 美股财报原文（SEC EDGAR 官方 XBRL）
 invest-cli us AAPL           # 美股快照（需先安装 yfinance，见下）
 invest-cli intent macro      # 宏观净流动性（FRED 免 Key CSV 通道）
@@ -41,6 +45,20 @@ invest-cli capabilities       # 外部源能力清单与收敛状态
 ```
 
 `datasources` 只用于诊断，**不要**作为每次取数的前置——`stock` / `fund` 内部已按可用性自动选源与回退。
+
+### 腾讯行情（零鉴权，多市场）
+
+腾讯行情是**免 Key** 的原生行情内核，一次请求可带任意多个标的，跨 A 股 / 港股 / 美股 / ETF / 可转债：
+
+```bash
+invest-cli quote 600519,00700,AAPL   # 纯行情：实测三市场一次 186ms，6 标的混合 189ms
+invest-cli kline 600519 --period day # K 线（年线按自然年聚合，未知周期会明确报错而非静默降级）
+```
+
+- **定位**：只回答「现在多少钱、涨跌多少、这几只对比一下」。问基本面请用 `stock` / `fund` / `us`（含 ROE / 净利润等，冷取数 0.5s 起）。
+- **不进 `stock` / `fund` 主位**：腾讯只有行情、没有基本面（净利润 / ROE / EPS / 资产负债率一个都没有），进主位会把 A 股快照从 13 项基本面退化成纯行情。链序为 `us = yfinance > 腾讯 > bitget`、`stock = 同花顺 > 东财 > yfinance > 腾讯`，`fund` / `screen` 不含腾讯。
+- **号码重叠会明说**：`quote 000001` 会同时说明「也是沪市指数 sh000001」；`stock` 遇到基金代码会直接拒绝并指向 `fund`。
+- 安装腾讯微证券 CLI 后，`invest-cli westock <子命令>` 可透传 40+ 长尾能力（筹码 / 龙虎榜 / 陆股通 / 北向 / 两融 / 一致预期 / ESG / 机构评级 / 产业链 / 板块估值 / 可转债条款 / 停复牌 / 风险事件）；`invest-cli westock --help` 列出命令树。
 
 ---
 
@@ -131,11 +149,11 @@ python3 <argo>/scripts/search.py --list-engines --detail # 含 key / 熔断 / �
 
 ## 7. 其他可选外部源（Wind / 盈米 / 官方 ttskill）
 
-- **Wind**：机构级数据，需 `WIND_SKILL_DIR` 指向 wind skill 目录并配好其自身 Key；`invest-cli wind <server_type> <tool>` 透传。
-- **盈米且慢**：基金诊断、组合诊断、配置方案；先 `yingmi-skill-cli init`，再走 `invest-cli intent deep fund <代码>` / `intent portfolio` / `intent plan`。
+- **Wind**：机构级数据，直连 Wind MCP（JSON-RPC over HTTP，不依赖 wind-mcp-skill 的 node CLI）；配好 `WIND_API_KEY` 或 `~/.wind-aifinmarket/config` 后 `invest-cli wind <server_type> <tool> --input '<json>'` 透传。
+- **盈米且慢**：基金诊断、组合诊断、配置方案；配好 apiKey（`~/.yingmi-skill-cli/config.json`）后走 `invest-cli intent deep fund <代码>` / `intent portfolio` / `intent plan`。
 - **官方 ttskill（天天基金）**：`fund` 快照的深取补充（同类分位 / 机构占比 / 经理在管）；登录就绪才补充，未登录自动跳过。37 个官方业务包清单见 `invest-cli capabilities ttskill`。
 
-这三者都是**可选增强**：不可用时整条链自动跳过，不影响其他能力。
+这三者都是**可选增强**：不可用时整条链自动跳过，不影响其他能力。三者均已改为**直连官方 API**，不再依赖外部 CLI 子进程。
 
 ---
 
@@ -187,4 +205,4 @@ python3 <argo>/scripts/search.py --list-engines --detail # 含 key / 熔断 / �
 
 ---
 
-*docs/data-sources.md · fund-investment-guide v2.5*
+*docs/data-sources.md · fund-investment-guide v2.7*

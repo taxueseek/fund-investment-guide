@@ -8,7 +8,6 @@ key 读取：环境变量 EASTMONEY_APIKEY 或用户级凭据文件（env_or_fil
 from __future__ import annotations
 
 import sys
-import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,27 @@ if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
 ENV_KEY = "EASTMONEY_APIKEY"
+
+
+def detect() -> tuple[bool, str]:
+    """可用性判据 = 凭据加载器的判据，逐字一致。
+
+    没有这个函数时，`env_or_file` 型会退到 registry 的通用回退——它**只看文件
+    是否存在**，不看文件里有没有 key。实测：`~/.config/invest-cli/eastmoney.env`
+    里只写一行注释时
+        registry.detect(eastmoney) -> (True, '读到 credentials.env')
+        eastmoney.load_api_key()   -> ''
+    于是 `invest-cli datasources` 报「东财可用」，而每次 `screen`/港股取数都
+    报「未设置 EASTMONEY_APIKEY」——排障时被这个假信号带偏。
+
+    同花顺/Wind/盈米/天天都已在适配器里自带 detect()，东财是唯一的例外；
+    补上它，也把「通用文件存在性回退」从生产路径上摘掉。
+    """
+    if load_api_key():
+        return True, f"{ENV_KEY} 已配置"
+    paths = credential_files()
+    where = "、".join(str(p) for p in paths) if paths else "（无凭据文件）"
+    return False, f"缺少 {ENV_KEY} 且凭据文件里没有该键：{where}"
 
 
 def credential_files() -> list[Path]:
@@ -42,7 +62,7 @@ def load_api_key() -> str:
                     return line.split("=", 1)[1].strip()
         except OSError:
             continue
-    return os.environ.get(ENV_KEY, "")
+    return ""
 
 
 # 可用性探测统一走 data-sources.yaml（type: env_or_file / EASTMONEY_APIKEY），见 sources/registry.py

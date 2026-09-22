@@ -56,7 +56,7 @@ invest-cli fund <代码/名称> [--json]
 - 数据源：同花顺金融数据服务优先；失败回退东方财富（intent deep fund 仍先盈米）
 - 获取：净值/业绩/回撤/费率/经理/十大重仓
 - 分析框架：对标 invest-fund 三关审查
-- 内置名称映射：易方达蓝筹→110011、中欧医疗→003096 等
+- 内置名称映射：易方达蓝筹（精选）→005827、中欧医疗→003096 等。注意 110011 现为「易方达优质精选(QDII)」，旧文档把「易方达蓝筹」映射到 110011 是错的（源码注释里专门记过这次纠偏）
 
 ### us — 美股分析
 
@@ -64,9 +64,21 @@ invest-cli fund <代码/名称> [--json]
 invest-cli us <代码> [--json]
 ```
 
-- 数据源：yfinance 优先（估值/财务/评级）；缺失或失败时回退 Bitget rToken 报价（USDT，非官方价）
-- 获取：全量快照（yfinance）或行情-only（bitget，`quote_type=rtoken`）
+- 数据源：yfinance 优先（估值/财务/评级）；缺失或失败时回退**腾讯行情**（真实美股行情，含 PE/PB/市值/52周/股息率/ROE），再退 Bitget rToken 报价（USDT，非官方价，只有成交价与 24h 区间）
+- 获取：全量快照（yfinance）或行情口径快照（tencent）或行情-only（bitget，`quote_type=rtoken`）
 - 分析框架：对标 invest-stock 美股四维度（ROE持续性/负债安全/FCF质量/经济护城河）；Bitget 回退仅有报价，无财务
+
+### quote — 免鉴权多标的实时行情（跨市场）
+
+```bash
+invest-cli quote <代码[,...]> [--json]
+```
+
+- 用途：**只要行情**的问题（「现在多少钱」「涨跌多少」「这几只对比一下」）
+- 数据源：腾讯行情（零鉴权），一次 HTTP 请求可带任意多个标的，跨 A股/港股/美股/ETF/可转债
+- 实测：单标的 ~130ms，6 标的混合 ~132ms；缓存 10s（比快照链的 60s 更严，行情语境下可忽略）
+- 与 `stock`/`fund`/`us` 的分工：那三条是**深度快照**（含基本面，冷取数 0.5s 起，美股 4s 量级），
+  `quote` 是**纯行情**。问基本面却用 quote 会缺 ROE/净利润；问行情却用 stock 会多付几倍等待
 
 ### sec — 美股财报原文（SEC EDGAR，免费官方源）
 
@@ -113,35 +125,36 @@ invest-cli datasources [--json]
 - 同时打印默认快照链（yaml × 真方法 × 可用性）；`--json` 含 `_chains`
 - 取数走 `stock/fund/us/intent`，由 `sources/route.py` 选源，禁止在分析 skill 里猜源
 
-### wind — 万得 Wind（机构级）
+### wind — 万得 Wind（机构级，直连 MCP）
 
 ```bash
 invest-cli wind <server_type> <tool> --input '<json>' [--json]
 ```
 
-- 透传 wind-mcp-skill 契约工具（stock_data/fund_data/index_data/...）
-- 定位：`WIND_SKILL_DIR` 或 `INVEST_SKILL_ROOTS` 指向 wind skill 目录
-- Key：wind skill 自身的 config（`~/.wind-aifinmarket/config`）
+- **直连 Wind MCP**（JSON-RPC over HTTP），不依赖 wind-mcp-skill 的 node CLI
+- server_type：stock_data/fund_data/index_data/bond_data/financial_docs/economic_data/analytics_data
+- Key 顺序与官方一致：`~/.wind-aifinmarket/config` > skill config.json > 环境变量 `WIND_API_KEY`
 
-### yingmi — 盈米且慢
+### yingmi — 盈米且慢（直连 OpenAPI）
 
 ```bash
 invest-cli yingmi <tool> --input '<json>' [--json]
 ```
 
-- 透传 `yingmi-skill-cli mcp call` 工具（基金/策略/财富/资讯，共 69 个）
-- 前置：`yingmi-skill-cli init` 完成
+- **直连盈米 OpenAPI**，不依赖 `yingmi-skill-cli`；操作清单取官方 docs.json（缓存 6h）
+- 凭据：`~/.yingmi-skill-cli/config.json` 的 apiKey（`Authorization: Bearer`）
 - 已收敛高层入口（优先走，勿重复透传）：GuessFundCode/GetFundDiagnosis/SearchFunds/DiagnoseFundPortfolio/GetAssetAllocationPlan
-- 批量/列表类工具（GetPopularFund/Batch*）返回 JSON 数组，适配器已支持（2026-09-03 修复）
+- 批量/列表类工具（GetPopularFund/Batch*）返回 JSON 数组，适配器已支持
 
-### ttskill — 天天基金官方业务包（透传，37 包可达）
+### ttskill — 天天基金业务包（透传，37 包可达，直连 gateway）
 
 ```bash
 invest-cli ttskill <skill_id> --input '<json>' [--json]
 ```
 
-- 透传官方 ttskill 业务包（2026-09-03 新增，此前 37 包仅 4 个"声明可达"）
-- 常用：`MANAGER_INFO`（经理画像/在管）、`NAV_INFO`（历史净值）、`STOCK_PRICE_QUERY`（实时行情）、`MACRO_DATA`（中美宏观）、`VALUATION_MAP`（指数/行业估值分位）、`INDEX_FUND_SELECTION`、`CONDITION_SELECT`
+- **直连官方 gateway**（POST /openapi/skill/invoke），不依赖 ttskill CLI；
+  沿用官方凭据存储（macOS Keychain `com.ttfund.ttskill.base`）与 ed25519 签名（官方同一套认证）
+- 常用：`TTFUND_MANAGER_INFO`（经理画像/在管）、`TTFUND_NAV_INFO`（历史净值）、`TTFUND_STOCK_PRICE_QUERY`（实时行情）、`TTFUND_MACRO_DATA`（中美宏观）、`TTFUND_VALUATION_MAP`（指数/行业估值分位）
 - 参数以官方包 `examples/*.example.json` 为准；返回为原始结构（各包层级不一，透传不解释）
 - fund 深取层内嵌 SEARCH/BASE_INFOS/HOLDING_INFO（走 `fund <code>`，勿手动透传）；黄金走 `intent deep commodity`
 - 账户/交易类包（ACCOUNT_*/TRADE_QUERY/CONDITION_ORDER/SIM_TRADE/RATION_PLAN/SUBACCOUNT）为边界外：invest-cli 数据链路不消费，不建高层入口
@@ -246,10 +259,11 @@ $ invest-cli us AAPL
 | yfinance | `pip3 install yfinance` | us（行情+财务） |
 | SEC EDGAR | 免费无 key（可选 `SEC_EDGAR_USER_AGENT` 声明身份） | us 财报原文（10-K XBRL 指标 + 申报清单，`invest-cli sec` 直取，不经快照链） |
 | Bitget rToken | 始终可用（公开 API） | us（仅行情/USDT） |
-| 万得 Wind | 定位 wind skill + key | stock/fund/index/bond/news/macro |
-| 盈米且慢 | `yingmi-skill-cli init` 完成 | fund/strategy/wealth/news |
-| 天天基金（官方 ttskill，可选深取） | `ttskill` 已登录且装齐业务包（缺省自动跳过） | fund（同类分位/机构占比/在管列表等深取补充） |
+| 万得 Wind（直连 MCP） | `WIND_API_KEY`（`~/.wind-aifinmarket/config` 或环境变量） | stock/fund/index/bond/news/macro |
+| 盈米且慢（直连 OpenAPI） | `~/.yingmi-skill-cli/config.json` 的 apiKey | fund/strategy/wealth/news |
+| 天天基金（直连 gateway） | 官方凭据未过期（Keychain `com.ttfund.ttskill.base`）+ 已装业务包 | fund（同类分位/机构占比/在管列表等深取补充） |
 | argo | `argo` skill 目录内含 `scripts/search.py` | news/macro（资讯/舆情/宏观检索；不经快照链，`info`/`intent macro` 直调）。引擎名原样透传给 argo（250+ 个，传错即报错、不静默换源）；清单见 argo `search.py --list-engines` |
+| 探测负缓存 | 默认自动 | **http 型**（如 yfinance 的端点可达性）探测失败的源 120s 内不重探（`INVEST_CLI_PROBE_TTL_FAIL` 可覆盖），期间直接跳过不付探测等待；**adapter 型**（同花顺/Wind/盈米/天天等凭据型）失败**不落盘**——补凭据是秒级恢复，落 120s 负缓存会让 `datasources` 给出 2 分钟前的旧结论，故仅进程内 30s；快照命中缓存则完全无感 |
 
 能力矩阵与详细配置见 `docs/data-sources.md`。取数与降级：单一场景优先最高优先级源，整单失败才降级，禁止跨源合并字段。
 

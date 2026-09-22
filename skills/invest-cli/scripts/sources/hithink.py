@@ -126,7 +126,25 @@ def file_has_key(path: Path, var: str = ENV_KEY) -> bool:
 
 
 def detect() -> tuple[bool, str]:
-    if os.environ.get(ENV_KEY, "").strip():
+    """可用性判据必须与 `load_api_key()` 用**同一套查找面**。
+
+    这里原先只读 `os.environ`，而 `load_api_key()` 走 `read_env`（进程环境 →
+    macOS launchctl → shell rc 文件）。`sources/env.py` 的模块说明把这种写法
+    点名为漂移源，后果实测如下（key 只写在 ~/.zshenv 时）：
+
+        read_env 找到 key 吗: True
+        hithink.load_api_key 找到吗: True
+        hithink.detect() -> (False, '缺少 HITHINK_FINANCE_API_KEY 且无凭据文件')
+        registry.detect(hithink) -> (False, ...)
+
+    而 registry 对 `env_or_file` 型会**直接采信适配器的判断**（不再回退到
+    `_probe_env`），于是同花顺被静默移出 A 股快照链、股票落到东财（口径不同），
+    `invest-cli datasources` 还会给出「缺少环境变量 且无凭据文件」这个错误原因。
+    一句话：用户明明配了 key，主数据源被丢掉且被告知没配。
+    """
+    from .env import read_env
+
+    if read_env(ENV_KEY):
         return True, f"{ENV_KEY} 已配置"
     for path in credential_files():
         if file_has_key(path):
@@ -148,6 +166,20 @@ def _to_float(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _dd(v: Any) -> Optional[float]:
+    """回撤专用转换：**全 0 视为缺失**。
+
+    实测（2026-09-22）：`fund 110011` 的上游 drawdowns 全返回 0，而同一份载荷里
+    近 1 年回报是 −29.43%。一只近一年跌近三成的基金不可能最大回撤为 0——那是
+    上游没给数据，不是真的没有回撤。把缺位渲染成 `0.0` 会给出自相矛盾的数字，
+    且下游框架会把它当事实用。缺失一律给 None，与其它缺字段的处理一致。
+    真实的 0.0 回撤在新基金上也可能出现，但那时「无法区分」本身就是不能放行的
+    理由——宁可报缺失，也不报一个可能错的值。
+    """
+    f = _to_float(v)
+    return None if f == 0 else f
 
 
 def _ratio(num: Optional[float], den: Optional[float]) -> Optional[float]:
@@ -187,8 +219,22 @@ def _first(data: Any) -> Optional[dict[str, Any]]:
     return rows[0] if rows else None
 
 
+# 「输入层失败」的标记：这一类失败**换源也解决不了**，只会让别的源去猜。
+#
+# 实测（2026-09-22）：`invest-cli fund -1` 时同花顺正确地报「多个候选无法唯一消歧」，
+# 但 route 按「整单回退」继续问 ttskill，而 ttskill 自己也会模糊解析——
+# 于是同一个输入在不同时刻返回了**两只不同的基金**（先 003376、后 006961，rc=0）。
+# 用户拿到的是一只"任选"的基金，且没有任何告警。
+# 消歧失败是「你的输入不足以定位标的」，不是「这个源不可用」，
+# 所以必须让 route 整体终止而不是继续降级。标记由适配器声明，route 只认标记。
+AMBIGUOUS_PREFIX = "多个候选无法唯一消歧"
+
+
 def _envelope(kind: str, ok: bool, data: Any = None, error: Optional[str] = None) -> dict[str, Any]:
-    return {"source": "hithink", "kind": kind, "ok": ok, "data": data, "error": error}
+    env: dict[str, Any] = {"source": "hithink", "kind": kind, "ok": ok, "data": data, "error": error}
+    if not ok and isinstance(error, str) and error.startswith(AMBIGUOUS_PREFIX):
+        env["input_error"] = True  # 输入不足以定位标的：整条链终止，不要换源去猜
+    return env
 
 
 def _default_http_get(url: str, headers: Optional[dict[str, str]] = None) -> tuple[int, str]:
@@ -339,7 +385,7 @@ def pick_ticker(
     cands = ", ".join(
         f"{i.get('thscode')} {i.get('name')} ({i.get('asset_type')})" for i in pool[:6]
     )
-    return None, f"多个候选无法唯一消歧: {cands}"
+    return None, f"{AMBIGUOUS_PREFIX}: {cands}"
 
 
 def parse_indicators(abilities: Any) -> dict[str, Optional[float]]:
@@ -762,7 +808,7 @@ def fund(
         "近1年回报": _to_float(ret_row.get("return_year")),
         "近3年回报": _to_float(ret_row.get("return_tyear")),
         "今年来回报": _to_float(ret_row.get("return_nowyear")),
-        "最大回撤": _to_float(dd_row.get("year")),
+        "最大回撤": _dd(dd_row.get("year")),  # 与 risk.max_drawdown_1y 同一判据，见 _dd
         "经理姓名": manager_name,
         "管理费率": _fee(rate_info, "management"),
         "托管费率": _fee(rate_info, "custody"),
@@ -796,9 +842,9 @@ def fund(
             "inception": _to_float(ret_row.get("return_now")),
         },
         "risk": {
-            "max_drawdown_1y": _to_float(dd_row.get("year")),
-            "max_drawdown_3y": _to_float(dd_row.get("tyear")),
-            "drawdowns": {k: _to_float(dd_row.get(k)) for k in ("week", "month", "tmonth", "hyear", "year", "twoyear", "tyear", "fyear", "nowyear", "now")},
+            "max_drawdown_1y": _dd(dd_row.get("year")),
+            "max_drawdown_3y": _dd(dd_row.get("tyear")),
+            "drawdowns": {k: _dd(dd_row.get(k)) for k in ("week", "month", "tmonth", "hyear", "year", "twoyear", "tyear", "fyear", "nowyear", "now")},
         },
         "fees": {
             "management": _fee(rate_info, "management"),

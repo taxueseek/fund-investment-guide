@@ -8,16 +8,14 @@ import importlib
 import importlib.util
 import json
 import os
-import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from . import load_registry
 
-# 可配置的数据源探测超时（防止探测某个 CLI 时卡死）
-DETECT_TIMEOUT = 10
+# 命令/目录型探测（起子进程）已随外部 CLI 依赖一起删除：现所有数据源都走
+# env / env_or_file / python / always，不再需要 shell 探针。
 ENV_KEY_FALLBACK = "HITHINK_FINANCE_API_KEY"
 # command/dir 探测贵（子进程），同进程 30s 内复用；env/python 本身很便宜不缓存。
 _PROBE_TTL = 30.0
@@ -31,12 +29,26 @@ PROBE_USER_AGENT = "invest-cli/1.0 (reachability probe)"
 #
 # 成功与失败的 TTL 刻意不同（**非对称**）：
 #   - 成功：缓存久一点（省探测成本，源确实好用）；
-#   - 失败：缓存很短，因为**一次网络抖动不该让一个可用源被禁 5 分钟**。
-#     负结果缓存过长会把「瞬时不可达」放大成「持续不可用」，
-#     这是探测类设计最典型的自伤（假阴性)。
+#   - 失败：缓存较短，避免把瞬时抖动放大成持续不可用；但也不能太短——
+#     本探测的 False 只来自「连不上/握手失败」（HTTPError 有状态码 = 可达 = True），
+#     这类网络级不可达恢复通常以分钟计。实测本机 Yahoo 不可达时，20s 负缓存
+#     会让 us 链每隔 20s 就重付 2s 探测 + 0.55s 取数失败（us 冷 2.6s vs 热 0.06s），
+#     提到 120s 后日常使用基本全热。可用 INVEST_CLI_PROBE_TTL_FAIL 覆盖。
 _PROBE_DISK_TTL = 300.0
-_PROBE_DISK_TTL_FAIL = 20.0
+_PROBE_DISK_TTL_DEFAULT_FAIL = 120.0
 _PROBE_CACHE: dict[tuple[Any, ...], tuple[float, bool, str]] = {}
+
+
+def _probe_disk_ttl_fail() -> float:
+    """失败探测的落盘 TTL（env 可覆盖；非法值回默认）。"""
+    raw = os.environ.get("INVEST_CLI_PROBE_TTL_FAIL", "").strip()
+    if not raw:
+        return _PROBE_DISK_TTL_DEFAULT_FAIL
+    try:
+        val = float(raw)
+    except ValueError:
+        return _PROBE_DISK_TTL_DEFAULT_FAIL
+    return max(0.0, val)
 
 
 def skill_roots() -> list[Path]:
@@ -151,38 +163,6 @@ def _probe_http(url: str, timeout: float = HTTP_PROBE_TIMEOUT) -> tuple[bool, st
         return False, f"{type(e).__name__}"
 
 
-def _probe_command(cmd: list[str], check: str) -> tuple[bool, str]:
-    if not cmd:
-        return False, "空探测命令"
-    exe = shutil.which(cmd[0])
-    if not exe:
-        return False, f"命令 {cmd[0]} 不在 PATH"
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=DETECT_TIMEOUT
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, f"命令 {cmd[0]} 探测失败: {e}"
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if not check:
-        return proc.returncode == 0, f"{cmd[0]} 返回码 {proc.returncode}"
-    if check in out:
-        return True, f"{cmd[0]} 通过，命中 {check!r}"
-    return False, f"{cmd[0]} 未命中 {check!r}"
-
-
-def _probe_dir(skill: str, key_hint: list[str]) -> tuple[bool, str]:
-    skill_dir = find_skill_dir(skill)
-    if skill_dir is None:
-        return False, f"未找到 skill 目录 {skill}（可用 INVEST_SKILL_ROOTS 指定）"
-    # key_hint 任一存在即视为已配置 key
-    for pattern in key_hint or []:
-        p = Path(pattern).expanduser()
-        if p.is_file():
-            return True, f"读到 {skill} skill 目录 + key 文件"
-    return False, f"找到 {skill} 目录，但未找到 key 文件（{key_hint}）"
-
-
 def _probe_cache_key(key: tuple[Any, ...]) -> tuple[Any, ...]:
     """把缓存根目录并入探测键。
 
@@ -226,8 +206,9 @@ def _cached(key: tuple[Any, ...], fn) -> tuple[bool, str]:
                 age = time.time() - disk.stat().st_mtime
                 data = json.loads(disk.read_text(encoding="utf-8"))
                 was_ok = bool(data.get("ok"))
-                # 负结果只缓存很短时间，避免把瞬时抖动放大成持续不可用
-                ttl = _PROBE_DISK_TTL if was_ok else _PROBE_DISK_TTL_FAIL
+                # 负结果 TTL 较短（默认 120s，env 可覆盖），避免把瞬时抖动
+                # 放大成持续不可用；同时不至于每 20s 就重付一次 2s 探测
+                ttl = _PROBE_DISK_TTL if was_ok else _probe_disk_ttl_fail()
                 if age < ttl:
                     ok, detail = was_ok, str(data.get("detail", ""))
                     _PROBE_CACHE[ckey] = (now, ok, detail)
@@ -267,8 +248,20 @@ def detect(conf: dict[str, Any]) -> tuple[bool, str]:
                 mod = importlib.import_module(f"sources.{names[0]}")
                 fn = getattr(mod, "detect", None)
                 if callable(fn):
-                    # 适配器级探测多为子进程（ttskill status 等），与 command/dir 同享 TTL 缓存
-                    return _cached(("adapter", names[0]), fn)
+                    # 适配器级探测多为子进程（ttskill status 等），与 command/dir 同享 TTL 缓存。
+                    # adapter 型的 False 来自「凭据缺失/过期」——用户补好凭据是**秒级**恢复，
+                    # 不满足 http 型「恢复以分钟计」的前提：False 时不落盘（落盘的 120s
+                    # 负缓存会让 datasources 排障时给出 2 分钟前的旧结论），仅进程内 30s。
+                    ok, detail = _cached(("adapter", names[0]), fn)
+                    if ok:
+                        return ok, detail
+                    disk = _probe_cache_path(_probe_cache_key(("adapter", names[0])))
+                    if disk is not None:
+                        try:
+                            disk.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    return ok, detail
             except Exception:
                 pass
         ok, detail = _probe_env(conf.get("env_var", ""))
@@ -282,21 +275,6 @@ def detect(conf: dict[str, Any]) -> tuple[bool, str]:
         return False, f"缺少环境变量 {var} 且无凭据文件"
     if dt == "python":
         return _probe_python((conf.get("detect") or {}).get("module", ""))
-    if dt == "command":
-        d = conf.get("detect") or {}
-        cmd = d.get("cmd", [])
-        check = d.get("check", "")
-        return _cached(("command", tuple(cmd), check), lambda: _probe_command(cmd, check))
-    if dt == "dir":
-        d = conf.get("detect") or {}
-        from .env import read_env
-
-        env_dir = read_env(d.get("env_dir", ""))
-        if env_dir and Path(env_dir).expanduser().is_dir():
-            return True, f"{d.get('env_dir')} 已指向 skill 目录"
-        skill = d.get("skill", "")
-        hints = tuple(d.get("key_hint") or [])
-        return _cached(("dir", skill, hints), lambda: _probe_dir(skill, list(hints)))
     if dt == "always":
         return True, "始终可用（免费无 key）"
     return False, f"未知探测方式 {dt!r}"

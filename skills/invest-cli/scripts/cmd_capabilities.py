@@ -53,81 +53,54 @@ def converge_status(source: str, tool_id: str) -> str:
     return "⬜ 透传: invest-cli yingmi <tool> 或 ttskill <skill_id>"
 
 
-# —— 动态清单获取（官方 CLI 为准，不手写第二份数据） ——
+# —— 动态清单获取（官方接口/本机索引为准，不手写第二份数据） ——
 def _yingmi_tools() -> list[dict]:
-    """yingmi-skill-cli mcp list → [{name, description}]；不可用返回 []。"""
-    import shutil
-    import subprocess
+    """盈米 OpenAPI 操作清单（直连 docs.json，不跑 yingmi-skill-cli）。"""
+    try:
+        from sources import yingmi as yingmi_src
 
-    exe = shutil.which("yingmi-skill-cli")
-    if not exe:
+        return yingmi_src.list_tools()
+    except Exception:
         return []
-    try:
-        proc = subprocess.run([exe, "mcp", "list"], capture_output=True, text=True, timeout=30)
-    except (subprocess.TimeoutExpired, OSError):
-        return []
-    if proc.returncode != 0:
-        return []
-    try:
-        tools = json.loads(proc.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    return [
-        {"name": t.get("name", ""), "description": (t.get("description") or t.get("summary") or "").strip()}
-        for t in tools if t.get("name")
-    ]
 
 
 def _ttskill_skills() -> list[dict]:
-    """ttskill skill list --json → [{skill_id, status, install_path, description}]。
+    """已装业务包清单：读本机 skills/index.json + 各包 SKILL.md 描述。
 
-    description 从本地 SKILL.md frontmatter 提取（skill list 不返回描述）。
-    不可用时返回 []。
+    旧实现跑 `ttskill skill list --json` 子进程；这里直接读官方落盘的索引，
+    零子进程，且不把业务包本体搬进本仓。
     """
-    import shutil
-    import subprocess
+    from sources import ttskill as tts_src
 
-    exe = shutil.which("ttskill")
-    if not exe:
-        return []
     try:
-        proc = subprocess.run([exe, "skill", "list", "--json"], capture_output=True, text=True, timeout=30)
-    except (subprocess.TimeoutExpired, OSError):
+        raw = json.loads(tts_src.SKILLS_INDEX.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return []
-    if proc.returncode != 0:
+    items = raw.get("skills") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
         return []
-    try:
-        data = json.loads(proc.stdout or "{}")
-        skills = (data.get("skills") if isinstance(data, dict) else None) or []
-    except json.JSONDecodeError:
-        return []
-
-    desc_cache: dict[str, str] = {}
-    for s in skills:
-        sid = s.get("skill_id", "")
-        ip = (s.get("install_path") or "").replace("\\", "/")
-        # 安装目录树：<root>/<skill_id>/<version>/SKILL.md 或 <root>/<skill_id>/SKILL.md
-        candidates = [Path(ip) / "SKILL.md"]
-        if ip:
-            root = Path(ip)
-            for cand in (root / "SKILL.md", root.parent / "SKILL.md", root.parent.parent / "SKILL.md"):
-                candidates.append(cand)
-        for cand in candidates:
-            if cand.is_file():
-                text = cand.read_text(encoding="utf-8", errors="ignore")[:600]
-                m = re.search(r"(?ms)^description:\s*[>|-]?\s*\n?(.*?)\n---", text)
-                if m:
-                    raw = m.group(1).strip().splitlines()
-                    desc_cache[sid] = (raw[0] if raw else "")[:150]
-                break
-    return [
-        {
-            "skill_id": s.get("skill_id", ""),
-            "status": s.get("status", ""),
-            "description": desc_cache.get(s.get("skill_id", ""), ""),
-        }
-        for s in skills
-    ]
+    out: list[dict] = []
+    for s in items:
+        if not isinstance(s, dict) or not s.get("skill_id"):
+            continue
+        desc = ""
+        install_path = str(s.get("install_path") or "")
+        if install_path:
+            md = Path(install_path) / "SKILL.md"
+            try:
+                if md.is_file():
+                    text = md.read_text(encoding="utf-8", errors="ignore")[:600]
+                    m = re.search(r"(?ms)^description:\s*[>|-]?\s*\n?(.*?)\n---", text)
+                    if m:
+                        desc = m.group(1).strip().splitlines()[0][:150]
+            except OSError:
+                pass
+        out.append({
+            "skill_id": str(s["skill_id"]),
+            "status": str(s.get("status", "")),
+            "description": desc,
+        })
+    return out
 
 
 def _fmt_row(cells: list[str], widths: list[int]) -> str:
@@ -157,9 +130,13 @@ def run(source: str, as_json: bool = False) -> int:
             print(_fmt_row(row, [26, 6, 24, 4, 62]))
         print("\n  高层入口速查：")
         print("    fund <代码> / stock <代码> / us <代码> / screen <条件>")
+        print("    quote <代码[,代码...]>                             免鉴权批量实时行情（跨市场，最省时）")
         print("    intent deep <fund|stock|bond|commodity> <标的>   意图深取")
         print("    intent screen/portfolio/plan/macro                意图筛选/组合/方案/宏观")
         print("    info <词> / watchlist                             资讯(argo)/自选")
+        print("    westock <子命令>                                   腾讯微证券长尾能力（筹码/龙虎榜/资金流/")
+        print("                                                      一致预期/ESG/评级/产业链/板块估值）；")
+        print("                                                      `westock --help` 看 40+ 子命令")
         print("    透传（高级/补漏）：wind / yingmi / ttskill — 清单见下方子命令")
         print("    capabilities yingmi | ttskill                     官方能力清单+收敛标注")
         return 0
@@ -167,14 +144,14 @@ def run(source: str, as_json: bool = False) -> int:
     if source == "yingmi":
         tools = _yingmi_tools()
         if not tools:
-            print("盈米不可用或未安装 yingmi-skill-cli", file=sys.stderr)
+            print("盈米不可用（缺 apiKey）", file=sys.stderr)
             return 1
         if as_json:
             print(json.dumps([{"name": t["name"], "status": converge_status("yingmi", t["name"]),
                                "description": t["description"]} for t in tools],
                              ensure_ascii=False, indent=2))
             return 0
-        print(f"\n  盈米且慢工具清单（官方 mcp list 动态，共 {len(tools)} 个）\n")
+        print(f"\n  盈米且慢工具清单（直连 OpenAPI 动态，共 {len(tools)} 个）\n")
         for t in sorted(tools, key=lambda x: (converge_status("yingmi", x["name"]).startswith("⬜"), x["name"])):
             line = f"  {t['name']:<38} {converge_status('yingmi', t['name'])}"
             print(line)
@@ -194,7 +171,7 @@ def run(source: str, as_json: bool = False) -> int:
                                "description": s["description"]} for s in skills],
                              ensure_ascii=False, indent=2))
             return 0
-        print(f"\n  天天基金官方业务包（ttskill skill list 动态，共 {len(skills)} 个）\n")
+        print(f"\n  天天基金官方业务包（本机已装包索引，共 {len(skills)} 个）\n")
         for s in sorted(skills, key=lambda x: (converge_status("ttskill", x["skill_id"]).startswith("⬜"), x["skill_id"])):
             st = converge_status("ttskill", s["skill_id"])
             line = f"  {s['skill_id']:<34} {st}"

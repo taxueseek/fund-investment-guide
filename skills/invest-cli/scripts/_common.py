@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import hashlib
 import time
@@ -128,46 +129,51 @@ def json_out(data: Any, *, indent: bool = True) -> str:
     return json.dumps(data, **opts)
 
 
-def eastmoney_ensure_ok(raw: dict, *, context: str = "") -> None:
-    """Raise a clear error when Eastmoney returns business failure.
-
-    One-line class fix: never treat rate-limit / dormant account as empty tables.
-    """
-    if not isinstance(raw, dict):
-        raise RuntimeError(f"东财 API 返回非 JSON 对象{context}")
-    if raw.get("success") is False or raw.get("data") is None:
-        msg = raw.get("message") or raw.get("msg") or str(raw.get("code", "unknown"))
-        raise RuntimeError(f"东财 API 失败{context}: {msg}")
-
-
-def parse_eastmoney_tables(raw: dict) -> list[dict]:
-    """Parse Eastmoney claw API table payload → list of flat row dicts."""
-    eastmoney_ensure_ok(raw)
-    try:
-        dtos = raw["data"]["data"]["searchDataResultDTO"]["dataTableDTOList"]
-    except (KeyError, TypeError):
-        return []
-
-    results: list[dict] = []
-    for item in dtos:
-        name_map = item.get("nameMap", {})
-        table = item.get("table", {})
-        row: dict[str, Any] = {"entityName": item.get("entityName", "")}
-        for col_id, col_name in name_map.items():
-            if col_id in table:
-                vals = table[col_id]
-                if isinstance(vals, list) and len(vals) > 0:
-                    row[col_name] = vals[0]
-        if len(row) > 1:
-            results.append(row)
-    return results
-
-
 def strip_paren_suffix(name: str) -> str:
     """Strip trailing date/unit parentheses: '最新价(元)(2026.05.22)' → '最新价'."""
     import re
 
     return re.sub(r"\(.*?\)", "", name).strip()
+
+
+# ═══ 代码域分类（单一真源） ═══
+#
+# 为什么放在这里：这个判据有两个消费者，且**必须是同一个判据**——
+#   · cmd_intent 用它把纯代码分派到不同意图（别为茅台去打盈米 CLI）；
+#   · cmd_stock / cmd_fund 用它拦「代码域与子命令不匹配」（`stock 110011`
+#     曾把易方达基金当成股票，返回一张全 `-` 的冒牌行情快照且 rc=0）。
+# 两份实现一定会漂移，漂移的后果是「同一串代码在两个入口得到相反结论」。
+
+# 6 位代码里能靠前缀 MECE 切开的部分。
+_SH_A = re.compile(r"^(60[0135]|688|689)\d{3}$")
+_CHINEXT = re.compile(r"^30[01]\d{3}$")
+_FUND_6 = re.compile(r"^[15]\d{5}$")
+# 可转债确定性段（盈米 GuessFundCode 实测 2026-09-03：这些段查询全部 400 查无基金）：
+# 113（沪市转债 2012+）、123/127/128（深市转债）。
+# 110/118 段与场外基金号段冲突（110011=易方达优质精选、118001=易方达亚洲精选，
+# 盈米实测命中），保留给消歧，不在确定性段。
+_BOND_6 = re.compile(r"^(113|123|127|128)\d{3}$")
+
+
+def kind_from_code(t: str) -> Optional[str]:
+    """纯代码的确定性分类。None = 与基金代码区间重叠，才允许外部消歧。
+
+    返回 "stock" / "fund" / "bond" 之一，或 None（无法确定，交给上层解析）。
+    """
+    import re as _re
+
+    t = (t or "").strip()
+    if _re.fullmatch(r"\d{5}", t):
+        return "stock"  # 港股 5 位
+    if not _re.fullmatch(r"\d{6}", t):
+        return None  # 非纯 6 位（名称/美股代码）不做确定性分类
+    if _SH_A.match(t) or _CHINEXT.match(t):
+        return "stock"
+    if _BOND_6.match(t):
+        return "bond"
+    if _FUND_6.match(t):
+        return "fund"
+    return None
 
 
 def pick_screen_columns(all_keys: list[str], limit: int = 6) -> list[str]:

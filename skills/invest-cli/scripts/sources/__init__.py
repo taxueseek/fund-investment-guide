@@ -14,8 +14,6 @@
 
 from __future__ import annotations
 
-import yaml  # type: ignore
-
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +27,14 @@ def load_registry() -> dict[str, Any]:
     """读取数据源配置真源，返回 {source_id: conf}。
 
     配置缺失或无法解析时返回空字典，调用方按「无数据源」处理并给出明确提示。
+
+    `import yaml` 刻意放在**函数内**：PyYAML 的 import 自耗时实测约 9ms
+    （reader/dumper/resolver/cyaml 一整串），而快照命中这条路径根本不需要配置
+    ——route.fetch 现在先判缓存、命中即返回（见 route.fetch 注释），
+    完全不会走到这里。放在模块顶层就等于让每次命中都白付一次 yaml 的 import。
     """
+    import yaml  # type: ignore
+
     cfg_path = repo_config_path()
     if not cfg_path.is_file():
         return {}

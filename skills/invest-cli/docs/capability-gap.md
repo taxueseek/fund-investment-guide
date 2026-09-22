@@ -25,7 +25,7 @@
 |---|---|---|---|---|
 | 名称→代码 | GuessFundCode(fundNameOrCode) | classify/_resolve_fund_code 已用 | — | 已收敛 |
 | 基金搜索排序 | SearchFunds(keyword/排序参数) | `intent screen fund` 已用 | — | 已收敛 |
-| **热门基金** | **GetPopularFund(size≤20)** | **适配器数组 bug → 透传失败** | **P0** | 修适配器（本次） |
+| **热门基金** | GetPopularFund(window 必填 1-30/size≤20) | 数组适配已修（09-03 直连版 `_wrap` 支持 list；实测 window=7 返回 items） | 已消除 | — |
 | 基金诊断 | GetFundDiagnosis(fundCode) | `intent deep fund` 已用 | — | 已收敛 |
 | 批量详情/业绩/净值 | BatchGetFundsDetail / GetBatchFundPerformance(≤20只) / BatchGetFundNavHistory | 无高层入口；**数组返回→全被 bug 挡** | P0 | 修适配器后透传可用 |
 | 持仓穿透分析 | GetFundAssetClassAnalysis / 行业族(getFundIndustryAllocation/Concentration/Preference/Returns) / getStockAllocationAndMetricsByFundCode / QDII地区 / Brinson/Campisi / 换手率 / 择时 / 债券族 | 无高层入口 | P1 | 透传可用，随用随收 |

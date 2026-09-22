@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 from typing import Any, Callable, Optional
 
 from . import load_registry
@@ -23,6 +24,68 @@ KIND_FNS = ("stock", "fund", "us", "screen")
 MARKET_EXCLUDE = {
     ("stock", "hk"): frozenset({"hithink"}),
 }
+
+# 代码域守卫：纯数字代码落在**确定段**却与所问的 kind 不符时，直接拒绝。
+#
+# 为什么放在 route 层而不是各 cmd_* 里：`stock` 有两条入口（`cmd_stock.
+# fetch_stock_with_fallback` 与 `cmd_intent` 的 `deep stock`），分别加守卫必然
+# 漏一条——实测 `invest-cli stock 110011` 已被拒，而
+# `invest-cli intent deep stock 110011` 仍拿到那张冒牌基金快照且 rc=0。
+# 这里与上面的「空标的」检查同层，都是「这个问题本身不成立」。
+#
+# 只拦**确定段**（`_common.kind_from_code` 的唯一真源）：`000858` 这类与基金
+# 号段重叠的返回 None，仍然放行交给下游解析，避免误杀正常查询。
+_DOMAIN_NAME = {"fund": "基金代码", "bond": "可转债代码", "stock": "股票代码"}
+_DOMAIN_HINT = {
+    "fund": "invest-cli fund {v}",
+    "bond": "invest-cli intent deep bond {v}",
+    "stock": "invest-cli stock {v}",
+}
+
+
+# 带市场前缀/后缀的写法 → **裸代码**。
+#
+# 为什么要收敛到裸代码：链上各源的入参口径不同 —— 同花顺/东财/ttskill/盈米要裸代码，
+# 腾讯/westock 要 `sh600519`，yfinance 要 `600519.SS`。过去没人管这件事，于是同一个
+# 标的换个写法就走另一条路：实测
+#   stock sh600519   → 同花顺「未找到匹配标的」→ 东财同 → 一路落到腾讯，只给 29 项**纯行情**（无基本面）
+#   stock hk00700    → 落到腾讯 25 项（东财的港股快照本有 21 项含年报数据）
+#   fund  sh510300   → 整条链失败（同花顺、ttskill 都认不出）
+#   us    usAAPL     → yfinance 认不出 → 落到腾讯
+# 在 route（唯一的取数入口）把写法归一成裸代码，各适配器再各自加自己需要的前缀 ——
+# 一处改动覆盖四个命令，而不是让每个源各自做一遍容错。
+_PREFIXED = re.compile(r"^(sh|sz|bj|hk|us)(?=[0-9A-Za-z])", re.I)
+# 只认**交易所后缀**，不动美股 ticker 里的点（BRK.B 的 .B 不是交易所代码）
+_SUFFIXED = re.compile(r"\.(SH|SZ|BJ|HK|US)$", re.I)
+
+
+def canonical_arg(arg: str) -> str:
+    """`sh600519` / `600519.SH` / `hk00700` / `usAAPL` → `600519` / `00700` / `AAPL`。"""
+    t = str(arg or "").strip()
+    if not t:
+        return t
+    m = _SUFFIXED.search(t)
+    if m:
+        return t[: -len(m.group(0))]
+    return _PREFIXED.sub("", t)
+
+
+def code_domain_error(kind: str, arg: str) -> str:
+    """kind 与**确定段**代码的类型不符时返回错误文案，否则返回空串。"""
+    if kind not in ("stock", "fund"):
+        return ""
+    try:
+        from _common import kind_from_code
+    except Exception:
+        return ""
+    code_kind = kind_from_code(arg)
+    if code_kind is None or code_kind == kind:
+        return ""
+    asked = _DOMAIN_NAME[kind]
+    return (
+        f"「{arg}」是{_DOMAIN_NAME.get(code_kind, code_kind)}，不是{asked.replace('代码', '')}。"
+        f"请改用：{_DOMAIN_HINT.get(code_kind, '').format(v=arg)}"
+    )
 
 # 快照缓存 TTL：与 _common 的口径常量对齐；screen 是条件查询，不缓存。
 _SNAPSHOT_TTL_KINDS = {"stock": "quote", "us": "quote", "fund": "fundamental"}
@@ -137,20 +200,28 @@ def fetch(
             "data": None,
             "error": f"空标的：{kind} 需要代码或名称",
         }
+    arg = canonical_arg(arg) if kind in KIND_FNS else arg
+    domain_err = code_domain_error(kind, arg)
+    if domain_err:
+        return {"source": kind, "kind": kind, "ok": False, "data": None, "error": domain_err}
     caller = invoke or _invoke
     errors: list[str] = []
     last: dict[str, Any] | None = None
     default_path = invoke is None and order is None
-    if order is None:
-        order = candidates(kind, market=market)
-    if not order:
-        return {
-            "source": kind,
-            "kind": kind,
-            "ok": False,
-            "data": None,
-            "error": f"无可用数据源: kind={kind} market={market or '-'}",
-        }
+    # ① 快照命中必须在**路由之前**判定。
+    #
+    # candidates() 看着便宜（只做能力判定、不探测），实际要读配置真源
+    # （yaml.safe_load，实测 2.7ms/次）并 import 链上每个适配器模块——而
+    # sources.bitget 一旦被 import 就带进 urllib.request → http.client → ssl，
+    # 实测整条热路径的 import 自耗时约 50ms，其中约 20-25ms 出自这条链。
+    # 缓存命中时这些全是白做的：一次 hit 重新解析配置、重新 import 一遍适配器，
+    # 只为返回一个磁盘上已经躺着的 JSON。
+    #
+    # 为什么提前判定不改变命中语义：缓存键只由 kind/market/arg 决定，与候选链
+    # 无关；ttl 只在默认路径（未注入 order/invoke）上非空，注入路径仍然直通。
+    # 唯一的行为差异是「候选链为空 + 缓存新鲜」这组：旧代码先报「无可用数据源」，
+    # 新代码先返回缓存。候选链为空意味着某个适配器连模块都 import 不进来，
+    # 那时给一份新鲜快照显然比报「无源」更符合调用方意图。
     ttl = _snapshot_ttl(kind) if default_path else None
     cache_key = f"{kind}|{market or '-'}|{arg}"
     if ttl:
@@ -162,6 +233,16 @@ def fetch(
             hit = None
         if isinstance(hit, dict) and hit.get("ok"):
             return {**hit, "cached": True}
+    if order is None:
+        order = candidates(kind, market=market)
+    if not order:
+        return {
+            "source": kind,
+            "kind": kind,
+            "ok": False,
+            "data": None,
+            "error": f"无可用数据源: kind={kind} market={market or '-'}",
+        }
     registry = load_registry() if default_path else {}
     detected = 0
     for sid in order:
@@ -192,15 +273,24 @@ def fetch(
                 except Exception:
                     pass
             return res
+        if isinstance(res, dict) and res.get("input_error"):
+            # 输入层失败（如「多个候选无法唯一消歧」）：换源解决不了，只会让下游源去猜。
+            # 实测 `fund -1` 曾因此返回一只任选的基金且 rc=0、同一输入不同时刻结果不同。
+            errors.append(f"{sid}: {res.get('error')}")
+            break
         errors.append(f"{sid}: {(res or {}).get('error') if isinstance(res, dict) else '非信封'}")
     if default_path and not detected:
-        # 整条链没有一个源通过探测：保持与旧 pick() 一致的结论与措辞
+        # 整条链没有一个源通过探测：结论与前缀措辞与旧 pick() 一致，但把
+        # **逐源原因**接在后面——`无可用数据源: kind=fund market=-` 是内部术语，
+        # 用户看不出缺哪个 key（同一条链上的 stock 会把原因列全，实测对比过）。
+        # 走到这里时每个候选都因不可用而进了 errors，故不必处理空 errors 分支。
         return {
             "source": kind,
             "kind": kind,
             "ok": False,
             "data": None,
-            "error": f"无可用数据源: kind={kind} market={market or '-'}",
+            "error": f"无可用数据源: kind={kind} market={market or '-'}；{'; '.join(errors)}",
+            "tried": order,
         }
     return {
         "source": kind,
